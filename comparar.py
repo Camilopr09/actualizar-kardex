@@ -51,6 +51,7 @@ class Accion:
     marcada: bool = True
     servicio: str = ""
     habitacion: str = ""
+    sis: object = None      # PacienteSistema relacionado (o None)
 
     @property
     def automatica(self):
@@ -109,11 +110,11 @@ def comparar(sistema, kardex):
         p = por_nombre[nom]
         if p.aviso:
             acciones.append(Accion("REVISAR", fila.nombre, detalle=p.aviso, fila=fila, marcada=False,
-                                   servicio=fila.servicio, habitacion=fila.habitacion))
+                                   servicio=fila.servicio, habitacion=fila.habitacion, sis=p))
         if p.habitacion and fila.habitacion and not _igual(p.habitacion, fila.habitacion):
             acciones.append(Accion("REVISAR", fila.nombre, "HABITACIÓN", fila.habitacion, p.habitacion,
                                    fila, "Habitación distinta (cambiar a mano; puede requerir mover de servicio)",
-                                   marcada=False, servicio=fila.servicio, habitacion=fila.habitacion))
+                                   marcada=False, servicio=fila.servicio, habitacion=fila.habitacion, sis=p))
         if not p.encontrado_detalle:
             continue
         for campo, nuevo, actual in (("DX", p.dx, fila.dx),
@@ -121,10 +122,10 @@ def comparar(sistema, kardex):
                                      ("TRATAMIENTO", p.tratamiento, fila.tratamiento)):
             if nuevo and not _igual(nuevo, actual):
                 acciones.append(Accion("ACTUALIZAR", fila.nombre, campo, actual, nuevo, fila,
-                                       f"{fila.servicio}", servicio=fila.servicio, habitacion=fila.habitacion))
+                                       f"{fila.servicio}", servicio=fila.servicio, habitacion=fila.habitacion, sis=p))
     for nom, p in por_nombre.items():
         if nom not in usados:
             acciones.append(Accion("AGREGAR", p.nombre, "", "", _resumen(p.nombre, p.habitacion, p.dx, p.fecha, p.medico),
                                    None, f"En el sistema ({p.modo}, {p.habitacion}) y no en el kardex",
-                                   marcada=False, servicio=p.modo, habitacion=p.habitacion))
+                                   marcada=False, servicio=p.modo, habitacion=p.habitacion, sis=p))
     return acciones

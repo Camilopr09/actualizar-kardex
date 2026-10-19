@@ -1,4 +1,5 @@
 """Navegación en Hospital Office con Playwright (usa Chrome o Brave ya instalados)."""
+import os
 import re
 import time
 from datetime import datetime
@@ -21,13 +22,22 @@ def abrir_contexto(pw, carpeta, preferido, log):
         raise ErrorApp("navegador", "No encontré Chrome ni Brave. Instala uno de los dos.")
     if nombre != preferido:
         log(f"No encontré {preferido.capitalize()}; uso {nombre.capitalize()}.")
+    args = ["--start-maximized", "--disable-blink-features=AutomationControlled"]
+    sin_ventana = os.environ.get("KARDEX_HEADLESS") == "1"     # solo para pruebas automáticas
+    if sin_ventana:
+        args.append("--no-sandbox")
     try:
         return pw.chromium.launch_persistent_context(
-            str(carpeta / f"perfil-{nombre}"), executable_path=ruta, headless=False, no_viewport=True,
+            str(carpeta / f"perfil-{nombre}"), executable_path=ruta, headless=sin_ventana, no_viewport=True,
             ignore_default_args=["--enable-automation"],   # con estos flags Google no bloquea el inicio de sesión
-            args=["--start-maximized", "--disable-blink-features=AutomationControlled"])
+            args=args)
     except Exception as e:  # noqa: BLE001
-        raise ErrorApp("navegador", f"No pude abrir {nombre.capitalize()}: {str(e).splitlines()[0]}") from e
+        raise ErrorApp("navegador", f"No pude abrir {nombre.capitalize()}: {_primera_linea(e)}") from e
+
+
+def _primera_linea(e):
+    """Primera línea del mensaje de una excepción (nunca falla aunque el mensaje esté vacío)."""
+    return (str(e).splitlines() or [e.__class__.__name__])[0]
 
 
 def _fecha(txt):
@@ -206,9 +216,12 @@ class Sistema:
                 self.log(f"  {p.nombre}: no pude leer las órdenes médicas")
             p.tratamiento = construir_tratamiento(info["plan"], ordenes, p.tratamiento)
             p.encontrado_detalle = True
-        except ErrorApp:
-            raise
+        except ErrorApp as e:
+            if e.codigo == "sesion":      # sin sesión no se puede seguir con nadie
+                raise
+            p.aviso = f"No pude leer su historia: {e.mensaje}"
+            self.diagnostico("error-" + p.nombre.split()[0])
         except Exception as e:  # noqa: BLE001
-            p.aviso = f"Error leyendo la historia: {str(e).splitlines()[0]}"
+            p.aviso = f"Error leyendo la historia: {_primera_linea(e)}"
             self.diagnostico("error-" + p.nombre.split()[0])
         return p

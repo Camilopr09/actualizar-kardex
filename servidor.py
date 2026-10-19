@@ -13,6 +13,7 @@ from pathlib import Path
 import demo as modulo_demo
 import flujo
 import navegador
+from comparar import emparejar
 from errores import Cancelado, ErrorApp
 
 VERSION = "2.0.0"
@@ -50,6 +51,7 @@ class Servidor:
         self.n = 0
         self.ultima_api = time.monotonic()
         self._nav = (0.0, {})
+        self._cache_res = None
         self.httpd = ThreadingHTTPServer(("127.0.0.1", puerto), _Handler)
         self.httpd.daemon_threads = True
         self.httpd.app = self
@@ -94,14 +96,33 @@ class Servidor:
     def _resultado(self):
         if self.sistema is None:
             return None
+        clave = (id(self.sistema), id(self.kardex), self.fecha, tuple(aid for aid, _ in self.acciones))
+        if self._cache_res and self._cache_res[0] == clave:
+            return self._cache_res[1]
+        res = self._construir_resultado()
+        self._cache_res = (clave, res)
+        return res
+
+    def _construir_resultado(self):
+        id_s = {id(p): f"s{i}" for i, p in enumerate(self.sistema)}
+        id_k = {id(f): f"k{i}" for i, f in enumerate(self.kardex)}
+        por_nombre = {p.nombre: p for p in self.sistema}
+        par_k, par_s = {}, {}          # id de kardex <-> id de sistema (mismo paciente)
+        for f in self.kardex:
+            nom = emparejar(f.nombre, por_nombre.keys())
+            if nom and id(por_nombre[nom]) not in par_s:
+                par_k[id(f)], par_s[id(por_nombre[nom])] = id_s[id(por_nombre[nom])], id_k[id(f)]
         return {
             "fecha": self.fecha,
             "sistema": [{"id": f"s{i}", "nombre": p.nombre, "habitacion": p.habitacion, "medico": p.medico,
-                         "fecha": p.fecha, "dx": p.dx} for i, p in enumerate(self.sistema)],
+                         "fecha": p.fecha, "dx": p.dx, "id_kardex": par_s.get(id(p))}
+                        for i, p in enumerate(self.sistema)],
             "kardex": [{"id": f"k{i}", "servicio": f.servicio, "nombre": f.nombre, "habitacion": f.habitacion,
-                        "dx": f.dx} for i, f in enumerate(self.kardex)],
+                        "dx": f.dx, "id_sistema": par_k.get(id(f))}
+                       for i, f in enumerate(self.kardex)],
             "acciones": [{"id": aid, "tipo": a.tipo, "paciente": a.paciente, "servicio": a.servicio,
                           "habitacion": a.habitacion, "campo": a.campo, "detalle": a.detalle,
+                          "id_sistema": id_s.get(id(a.sis)), "id_kardex": id_k.get(id(a.fila)),
                           "actual": a.actual, "nuevo": a.nuevo, "automatica": a.automatica,
                           "marcada": a.marcada} for aid, a in self.acciones],
         }
@@ -131,6 +152,8 @@ class Servidor:
                 return False
             self.tarea, self.error = tipo, None
             self.cancel.clear()
+            if tipo == "escribir":
+                self.escritura = None
             if tipo == "analizar":
                 self.progreso = {"actual": 0, "total": 0, "paciente": ""}
         threading.Thread(target=self._correr, args=(tipo, trabajo, al_terminar), daemon=True).start()
@@ -206,7 +229,11 @@ class Servidor:
             if k in datos:
                 if not isinstance(datos[k], str):
                     raise ValueError(f"{k} debe ser texto")
-                nuevo[k] = datos[k].strip()
+                v = datos[k].strip()
+                if not v.lower().startswith(("http://", "https://")):
+                    # además evita que un valor tipo «--opción» llegue como argumento al navegador
+                    raise ValueError("El enlace debe empezar por http:// o https://")
+                nuevo[k] = v
         if "navegador" in datos:
             if datos["navegador"] not in navegador.NOMBRES:
                 raise ValueError("navegador debe ser «chrome» o «brave»")

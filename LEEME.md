@@ -37,3 +37,9 @@ descargar el `credentials.json` y cargarlo en **Ajustes → Escribir en Google D
 - Si la Agenda pagina los resultados, solo se leen las filas visibles.
 - Los datos de pacientes solo viven en memoria mientras la app está abierta (no se guardan en disco, salvo `diagnostico\` si algo falla). El registro técnico `registro-app.txt` no incluye datos de pacientes.
 - Confirma con la clínica (Ley 1581) que la lectura automatizada esté permitida. `credentials.json`, `token.json`, `perfil-*\` y `diagnostico\` contienen datos sensibles.
+
+## Pruebas (desarrollo)
+`python -m pytest -q tests`. Las pruebas con navegador (`test_e2e_ui.py`: recorrido de la interfaz en modo demo; `test_integracion_sistema.py`:
+`flujo.analizar` contra un simulador de Hospital Office en `tests/simulador/`) usan Playwright con un Chromium; si no hay, se saltan.
+Variables solo para pruebas: `KARDEX_CHROME` (ruta del Chromium), `KARDEX_HEADLESS=1` (abre el navegador de automatización sin ventana),
+`KARDEX_CAPTURAS=<carpeta>` (guarda capturas del recorrido).

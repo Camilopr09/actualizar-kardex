@@ -15,6 +15,8 @@ def test_evolucion():
     assert "COLECISTITIS" in r["dx"] and "EXAMEN" not in r["dx"]
     assert r["evolucion"].startswith("16/10/2026 CARLOS DAZA:")
     assert r["plan"].startswith("1. DIETA LIQUIDA")
+    # el texto de la evolución arranca justo después del DX (sin restos de él)
+    assert r["evolucion"] == "16/10/2026 CARLOS DAZA: EXAMEN FISICO: ALERTA, ABDOMEN BLANDO ANALISIS: BUENA EVOLUCION"
 
 def test_ordenes_y_tratamiento():
     o = interpretar_ordenes("DIETA LIQUIDA\nFórmula #1\n1) CEFAZOLINA 1G Cantidad: 3 Dosis: 1 g IV c/8h\n")

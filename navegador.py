@@ -29,21 +29,23 @@ def _registro(exe):
     except ImportError:
         return None
     clave = rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}"
+    vistas = (0, getattr(winreg, "KEY_WOW64_64KEY", 0), getattr(winreg, "KEY_WOW64_32KEY", 0))
     for raiz in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
-        try:
-            with winreg.OpenKey(raiz, clave) as k:
-                valor, _ = winreg.QueryValueEx(k, "")
-                if valor:
-                    return str(valor).strip('"')
-        except OSError:
-            continue
+        for vista in vistas:
+            try:
+                with winreg.OpenKey(raiz, clave, 0, winreg.KEY_READ | vista) as k:
+                    valor, _ = winreg.QueryValueEx(k, "")
+                    if valor:
+                        return str(valor).strip().strip('"')
+            except OSError:
+                continue
     return None
 
 
 def _buscar(nombre):
     if sys.platform.startswith("win"):
         cands = [_registro(_EXE[nombre])]
-        for var in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        for var in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA"):
             base = os.environ.get(var)
             if base:
                 cands.append(os.path.join(base, _REL_WIN[nombre]))
@@ -65,26 +67,28 @@ def detectar():
     return res
 
 
-def elegir(preferido):
-    """(nombre, ruta) del preferido si existe; si no, el otro; si no hay, (None, None)."""
+def _candidatos(preferido):
+    """[(nombre, ruta)] instalados, el preferido primero."""
     preferido = preferido if preferido in NOMBRES else "chrome"
     hallados = detectar()
     orden = [preferido] + [n for n in NOMBRES if n != preferido]
-    for n in orden:
-        if hallados.get(n):
-            return n, hallados[n]
-    return None, None
+    return [(n, hallados[n]) for n in orden if hallados.get(n)]
+
+
+def elegir(preferido):
+    """(nombre, ruta) del preferido si existe; si no, el otro; si no hay, (None, None)."""
+    c = _candidatos(preferido)
+    return c[0] if c else (None, None)
 
 
 def abrir(url, preferido, app=False):
-    """Abre la URL en el navegador elegido (ventana tipo app o normal)."""
-    _, ruta = elegir(preferido)
-    if ruta:
+    """Abre la URL en el navegador elegido (ventana tipo app o normal). Si ese no arranca, prueba el otro."""
+    for _, ruta in _candidatos(preferido):
         try:
             subprocess.Popen([ruta, f"--app={url}"] if app else [ruta, url])
             return
         except OSError:
-            pass
+            continue
     webbrowser.open(url)
 
 

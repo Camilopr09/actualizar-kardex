@@ -23,11 +23,13 @@ def interpretar_evolucion(texto, fecha="", medico=""):
     """Devuelve dict con dx, evolucion, plan a partir del texto libre de la nota."""
     t = limpiar(texto)
     dx = ""
+    fin_dx = 0
     m = _DX.search(t)
     if m:
         resto = t[m.end():]
         corte = _CORTE_DX.search(resto)
         dx = resto[: corte.start()] if corte else resto
+        fin_dx = m.end() + len(dx)          # dónde termina el DX en el texto original (antes de limpiarlo)
     dx = re.sub(r"\s*\n\s*", "\n", dx).strip()
 
     plan = ""
@@ -40,7 +42,7 @@ def interpretar_evolucion(texto, fecha="", medico=""):
         cuerpo = t[: ult.start()]
     # la evolución es lo que sigue a los diagnósticos y precede al plan
     if m:
-        cuerpo = cuerpo[m.end() + len(dx):]
+        cuerpo = cuerpo[fin_dx:]
     cuerpo = re.sub(r"\s*\n\s*", " ", cuerpo).strip(" -:\n")
     if len(cuerpo) > 700:
         cuerpo = cuerpo[:700].rsplit(" ", 1)[0] + "…"

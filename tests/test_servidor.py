@@ -99,7 +99,7 @@ def test_config(c):
     assert c.estado()["config"]["url_kardex"] == "http://k/"
     assert flujo.cargar_config()["navegador"] == "brave"          # quedó en disco
     for malo in ({"navegador": "edge"}, {"especialistas": "DAZA"}, {"especialistas": ["", "A"]},
-                 {"url_kardex": 5}):
+                 {"url_kardex": 5}, {"url_kardex": "--renderer-cmd-prefix=x"}, {"url_agenda": ""}):
         st, r = c.post("/api/config", malo)
         assert st == 400 and r["ok"] is False
     assert c.estado()["config"]["navegador"] == "brave"
@@ -127,9 +127,14 @@ def test_flujo_completo(c):
     assert len({k["servicio"] for k in r["kardex"]}) == 13
     assert {a["tipo"] for a in r["acciones"]} == {"ACTUALIZAR", "AGREGAR", "RETIRAR", "REVISAR"}
     assert set(r["acciones"][0]) == {"id", "tipo", "paciente", "servicio", "habitacion", "campo", "detalle",
-                                     "actual", "nuevo", "automatica", "marcada"}
-    assert set(r["sistema"][0]) == {"id", "nombre", "habitacion", "medico", "fecha", "dx"}
-    assert set(r["kardex"][0]) == {"id", "servicio", "nombre", "habitacion", "dx"}
+                                     "actual", "nuevo", "automatica", "marcada", "id_sistema", "id_kardex"}
+    ids_s, ids_k = {x["id"] for x in r["sistema"]}, {x["id"] for x in r["kardex"]}
+    for a in r["acciones"]:
+        assert a["id_sistema"] in ids_s | {None} and a["id_kardex"] in ids_k | {None}
+        assert (a["id_sistema"] is None) == (a["tipo"] == "RETIRAR")
+        assert (a["id_kardex"] is None) == (a["tipo"] == "AGREGAR")
+    assert set(r["sistema"][0]) == {"id", "nombre", "habitacion", "medico", "fecha", "dx", "id_kardex"}
+    assert set(r["kardex"][0]) == {"id", "servicio", "nombre", "habitacion", "dx", "id_sistema"}
     assert e["progreso"]["total"] > 0 and e["progreso"]["actual"] == e["progreso"]["total"]
     assert any("Análisis terminado" in linea for linea in e["registro"])
     assert all(linea[2] == ":" for linea in e["registro"])
@@ -243,3 +248,18 @@ def test_inactividad(srv):
     assert not srv.inactivo(60)
     time.sleep(0.05)
     assert srv.inactivo(0.01)
+
+
+def test_carpeta_ui_con_pyinstaller(tmp_path, monkeypatch):
+    import sys
+    import servidor
+    (tmp_path / "ui").mkdir()
+    (tmp_path / "ui" / "index.html").write_text("<title>empaquetada</title>", encoding="utf-8")
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    assert servidor.carpeta_ui() == tmp_path / "ui"
+    s = Servidor(demo=True)
+    s.iniciar()
+    try:
+        assert b"empaquetada" in Cliente(s).get("/", token=False)[1]
+    finally:
+        s.detener()

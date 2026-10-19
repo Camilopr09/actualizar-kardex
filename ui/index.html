@@ -329,7 +329,7 @@ function finTarea(u){
     if(u.fin==='ok')S.scene='result';
     else if(S.scene==='analyzing')S.scene='main';
   }else if(u.tipo==='escribir'){
-    if(u.fin==='ok')S.scene='done';
+    if(u.fin==='ok'){S.scene='done';$('toast').hidden=true;}
   }else if(u.tipo==='sesion'){
     if(u.fin==='ok')say('Sesión guardada.');
   }
@@ -351,7 +351,7 @@ function syncResultado(newAnalN){
 }
 function ensureSel(){
   const R=S.E.resultado;if(!R)return;
-  const list=tabList(S.tab);
+  const list=filtered();
   if(!S.sel||!list.some(x=>x.id===S.sel)){S.sel=list.length?list[0].id:null;}
 }
 function tabList(t){const R=S.E&&S.E.resultado;if(!R)return [];return t==='act'?R.acciones:t==='sis'?R.sistema:R.kardex;}
@@ -548,7 +548,7 @@ function cmpData(){
   if(S.tab==='act')act=R.acciones.find(a=>a.id===S.sel);
   else{
     row=(S.tab==='sis'?R.sistema:R.kardex).find(r=>r.id===S.sel);
-    if(row)act=R.acciones.find(a=>a.paciente===row.nombre);
+    if(row)act=R.acciones.find(a=>(S.tab==='sis'?a.id_sistema:a.id_kardex)===row.id);
   }
   if(act){
     const who=[act.paciente,act.servicio,act.habitacion,act.campo].filter(Boolean).join(' · ');
@@ -558,7 +558,8 @@ function cmpData(){
     return {t:act.tipo,label:act.tipo,who:who,o:o,n:n,po:po,pn:pn};
   }
   if(row){
-    const k=R.kardex.find(r=>r.nombre===row.nombre),s=R.sistema.find(r=>r.nombre===row.nombre);
+    const kid=S.tab==='kar'?row.id:row.id_kardex,sid=S.tab==='sis'?row.id:row.id_sistema;
+    const k=R.kardex.find(r=>r.id===kid),s=R.sistema.find(r=>r.id===sid);
     return {t:'NONE',label:'SIN CAMBIOS',who:row.nombre+' · DX',
       o:k?(k.dx||''):'— No está en el kardex —',po:!k,n:s?(s.dx||''):'— No aparece en el sistema —',pn:!s};
   }
@@ -592,7 +593,7 @@ function goLogin(){setScene('login');}
 async function doAnalyze(){
   if(!S.E)return;
   if(!S.E.sesion_guardada){say('Primero inicia sesión (paso 1).');setScene('login');return;}
-  await saveKardexUrl();
+  if(!(await saveKardexUrl()))return;
   const r=await call('/api/analizar',{});
   if(!r.ok){say(r.data.mensaje||'No se pudo iniciar el análisis.');return;}
   S.cancelling=false;
@@ -964,8 +965,14 @@ $('bWrite').addEventListener('click',goWrite);
 $('bCopy').addEventListener('click',copyNew);
 $('kurl').addEventListener('blur',saveKardexUrl);
 $('kurl').addEventListener('keydown',ev=>{if(ev.key==='Enter')ev.target.blur();});
-$('q').addEventListener('input',ev=>{S.query=ev.target.value;if(S.E){renderTable();}});
-$('typeF').addEventListener('change',ev=>{S.typeF=ev.target.value;if(S.E)renderTable();});
+function refilter(){ // tras filtrar, la selección debe seguir siendo una fila visible
+  if(!S.E||!S.E.resultado)return;
+  const rows=filtered();
+  if(!rows.some(r=>r.id===S.sel))S.sel=rows.length?rows[0].id:null;
+  renderTable();renderCmp();
+}
+$('q').addEventListener('input',ev=>{S.query=ev.target.value;refilter();});
+$('typeF').addEventListener('change',ev=>{S.typeF=ev.target.value;refilter();});
 if(window.matchMedia)try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',e=>{let t=null;try{t=localStorage.getItem('kardex-tema');}catch(x){}if(!t)applyTheme(e.matches?'dark':'light');});}catch(e){}
 initTheme();
 poll();
