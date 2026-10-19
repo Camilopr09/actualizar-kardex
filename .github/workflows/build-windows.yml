@@ -1,0 +1,39 @@
+name: Actualizar Kardex (.exe para Windows)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pyinstaller pytest
+      - run: python -m pytest -q tests
+      - run: pyinstaller --noconfirm --onefile --windowed --name "Actualizar Kardex" --add-data "ui;ui" --collect-all playwright --collect-data googleapiclient app.py
+      - name: Probar el .exe en modo demostración
+        shell: pwsh
+        run: |
+          $datos = Join-Path $env:RUNNER_TEMP "kardex-datos"
+          New-Item -ItemType Directory -Force $datos | Out-Null
+          $env:KARDEX_DATOS = $datos
+          Start-Process -FilePath "dist\Actualizar Kardex.exe" -ArgumentList "--demo", "--no-abrir" | Out-Null
+          $f = Join-Path $datos "instancia-demo.json"
+          for ($i = 0; $i -lt 60 -and -not (Test-Path $f); $i++) { Start-Sleep -Seconds 1 }
+          if (-not (Test-Path $f)) { throw "El .exe no arranco" }
+          $d = Get-Content $f -Raw | ConvertFrom-Json
+          $base = "http://127.0.0.1:$($d.puerto)"
+          $cab = @{ "X-Token" = $d.token }
+          $pagina = (Invoke-WebRequest "$base/?t=$($d.token)" -UseBasicParsing).Content
+          if ($pagina -notmatch "sc-analyzing") { throw "El .exe no incluye la carpeta ui" }
+          $e = Invoke-RestMethod "$base/api/estado" -Headers $cab
+          if ($e.version -ne "2.0.0" -or -not $e.demo) { throw "Estado inesperado" }
+          Invoke-RestMethod "$base/api/salir" -Method Post -Headers $cab -ContentType "application/json" -Body "{}" | Out-Null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Actualizar-Kardex-Windows
+          path: dist/Actualizar Kardex.exe
