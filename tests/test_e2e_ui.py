@@ -70,6 +70,16 @@ def _api(app, ruta, cuerpo=None):
         return json.loads(r.read())
 
 
+def _esperar_fin(app, n_previo):
+    """Espera a que termine la tarea en curso (ultima.n > n_previo y sin tarea)."""
+    for _ in range(100):
+        e = _api(app, "/api/estado")
+        if not e["tarea"] and e["ultima"] and e["ultima"]["n"] > n_previo:
+            return e
+        time.sleep(0.1)
+    raise AssertionError("la tarea no terminó")
+
+
 def test_recorrido_completo(app, tmp_path):
     from playwright.sync_api import expect, sync_playwright
 
@@ -126,8 +136,7 @@ def test_recorrido_completo(app, tmp_path):
         page.get_by_role("button", name="Cancelar").click()
         expect(page.locator("#sc-main")).to_be_visible()
         expect(page.get_by_text("Todavía no hay resultados")).to_be_visible()
-        page.wait_for_function("fetch('/api/estado',{headers:{'X-Token':new URLSearchParams(location.search).get('t')||sessionStorage.getItem('kardex-t')}})"
-                               ".then(r=>r.json()).then(e=>!e.tarea&&e.ultima&&e.ultima.fin==='cancelado')")
+        _esperar_fin(app, 1)
         assert _api(app, "/api/estado")["resultado"] is None
 
         # ---- Analizar completo -> Resultado
@@ -278,11 +287,7 @@ def test_recorrido_completo(app, tmp_path):
         expect(page.locator("#sc-analyzing")).to_be_visible()
         page.get_by_role("button", name="Cancelar").click()
         expect(page.locator("#sc-main")).to_be_visible()
-        for _ in range(50):
-            despues = _api(app, "/api/estado")
-            if not despues["tarea"] and despues["ultima"]["n"] > previo["ultima"]["n"]:
-                break
-            time.sleep(0.1)
+        despues = _esperar_fin(app, previo["ultima"]["n"])
         assert despues["ultima"]["fin"] == "cancelado" and despues["resultado"] == antes
 
         # ---- Ajustes
