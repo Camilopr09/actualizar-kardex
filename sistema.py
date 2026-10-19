@@ -1,9 +1,11 @@
-"""Navegación en Hospital Office con Playwright (usa Chrome o Edge ya instalados)."""
+"""Navegación en Hospital Office con Playwright (usa Chrome o Brave ya instalados)."""
 import re
 import time
 from datetime import datetime
 
+import navegador
 from comparar import PacienteSistema, emparejar
+from errores import ErrorApp
 from notas import (construir_tratamiento, interpretar_evolucion, interpretar_ordenes, normalizar)
 
 GRID_PEND = "ctl00_cph1_cbpPanel1_grdPendientes"
@@ -12,18 +14,20 @@ GRID_FORM = "ctl00_cph1_ASPxRoundPanel2_grdFormatos"
 MODOS = ("Urgencias", "Hospitalización")
 
 
-def abrir_contexto(pw, perfil, canal_preferido=""):
-    """Abre Chrome (o Edge, que viene con Windows) con un perfil propio que recuerda los inicios de sesión."""
-    errores = []
-    canales = [c for c in (canal_preferido, "chrome", "msedge") if c]
-    for canal in dict.fromkeys(canales):
-        try:
-            return pw.chromium.launch_persistent_context(
-                str(perfil), channel=canal, headless=False, no_viewport=True,
-                args=["--start-maximized"])
-        except Exception as e:  # noqa: BLE001
-            errores.append(f"{canal}: {str(e).splitlines()[0]}")
-    raise RuntimeError("No se pudo abrir Chrome ni Edge. " + " | ".join(errores))
+def abrir_contexto(pw, carpeta, preferido, log):
+    """Abre Chrome o Brave con un perfil propio que recuerda los inicios de sesión."""
+    nombre, ruta = navegador.elegir(preferido)
+    if not ruta:
+        raise ErrorApp("navegador", "No encontré Chrome ni Brave. Instala uno de los dos.")
+    if nombre != preferido:
+        log(f"No encontré {preferido.capitalize()}; uso {nombre.capitalize()}.")
+    try:
+        return pw.chromium.launch_persistent_context(
+            str(carpeta / f"perfil-{nombre}"), executable_path=ruta, headless=False, no_viewport=True,
+            ignore_default_args=["--enable-automation"],   # con estos flags Google no bloquea el inicio de sesión
+            args=["--start-maximized", "--disable-blink-features=AutomationControlled"])
+    except Exception as e:  # noqa: BLE001
+        raise ErrorApp("navegador", f"No pude abrir {nombre.capitalize()}: {str(e).splitlines()[0]}") from e
 
 
 def _fecha(txt):
@@ -74,13 +78,26 @@ class Sistema:
                  [...tr.querySelectorAll('td')].map(td => td.innerText.trim()))""", grid)
 
     # ------------------------------------------------------------ agenda
+    def _pide_login(self):
+        """True si la página actual es un inicio de sesión."""
+        if "login" in self.page.url.lower():
+            return True
+        try:
+            return self.page.locator("input[type=password]").first.is_visible(timeout=500)
+        except Exception:  # noqa: BLE001
+            return False
+
     def ir_agenda(self):
         self.page.goto(self.cfg["url_agenda"], wait_until="domcontentloaded")
+        if self._pide_login():
+            raise ErrorApp("sesion", "Hospital Office pide iniciar sesión.")
         try:
             self.page.wait_for_selector(f"#{GRID_PEND}, #{GRID_ATEN}", timeout=15000)
         except Exception:  # noqa: BLE001
             self.diagnostico("agenda")
-            raise RuntimeError("No se ve la Agenda de Hospital Office. Usa «Iniciar sesión» y entra al sistema.")
+            if self._pide_login():
+                raise ErrorApp("sesion", "Hospital Office pide iniciar sesión.")
+            raise ErrorApp("agenda", "No se ve la Agenda de Hospital Office.")
 
     def _modo(self, modo):
         try:
@@ -189,6 +206,8 @@ class Sistema:
                 self.log(f"  {p.nombre}: no pude leer las órdenes médicas")
             p.tratamiento = construir_tratamiento(info["plan"], ordenes, p.tratamiento)
             p.encontrado_detalle = True
+        except ErrorApp:
+            raise
         except Exception as e:  # noqa: BLE001
             p.aviso = f"Error leyendo la historia: {str(e).splitlines()[0]}"
             self.diagnostico("error-" + p.nombre.split()[0])

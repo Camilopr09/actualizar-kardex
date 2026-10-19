@@ -4,6 +4,8 @@ import re
 from html.parser import HTMLParser
 
 from comparar import FilaKardex
+from errores import ErrorApp
+import navegador
 
 _BLOQUE = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "div"}
 
@@ -104,11 +106,15 @@ def id_documento(url_o_id):
 
 def descargar_html(contexto, url):
     """Descarga el HTML exportado usando las cookies del navegador ya iniciado."""
-    doc = id_documento(url)
-    r = contexto.request.get(f"https://docs.google.com/document/d/{doc}/export?format=html")
-    if not r.ok or "accounts.google.com" in r.url:
-        raise RuntimeError("No se pudo leer el Google Doc. Usa «Iniciar sesión» y entra a tu cuenta de Google "
-                           "(la que tiene acceso al KARDEX).")
+    if url.startswith(("http://127.0.0.1", "http://localhost")):
+        r = contexto.request.get(url)          # simulador de pruebas: se descarga tal cual
+    else:
+        doc = id_documento(url)
+        r = contexto.request.get(f"https://docs.google.com/document/d/{doc}/export?format=html")
+    if "accounts.google.com" in r.url:
+        raise ErrorApp("sesion", "Google pide iniciar sesión. Entra a la cuenta que tiene acceso al KARDEX.")
+    if not r.ok:
+        raise ErrorApp("kardex", f"No se pudo leer el Google Doc (respuesta {r.status}). Revisa el enlace del KARDEX.")
     return r.text()
 
 
@@ -117,22 +123,25 @@ SCOPES = ["https://www.googleapis.com/auth/documents"]
 _COL = {"DX": 1, "EVOLUCIÓN": 2, "TRATAMIENTO": 3}
 
 
-def servicio_docs(carpeta):
+def servicio_docs(carpeta, preferido="chrome"):
     """Crea el cliente de la API. Requiere credentials.json en la carpeta de datos."""
+    cred_file, token_file = carpeta / "credentials.json", carpeta / "token.json"
+    if not cred_file.exists():
+        raise ErrorApp("credenciales", "Falta credentials.json. Cárgalo en Ajustes (ver LEEME.md, "
+                                       "sección «Para escribir en el documento»).")
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
     from googleapiclient.discovery import build
 
-    cred_file, token_file = carpeta / "credentials.json", carpeta / "token.json"
-    if not cred_file.exists():
-        raise FileNotFoundError(f"Falta {cred_file}. Ver LEEME.md, sección «Para escribir en el documento».")
     cred = Credentials.from_authorized_user_file(str(token_file), SCOPES) if token_file.exists() else None
     if not cred or not cred.valid:
         if cred and cred.expired and cred.refresh_token:
             cred.refresh(Request())
         else:
-            cred = InstalledAppFlow.from_client_secrets_file(str(cred_file), SCOPES).run_local_server(port=0)
+            flujo = InstalledAppFlow.from_client_secrets_file(str(cred_file), SCOPES)
+            nav = "kardex" if navegador.registrar_webbrowser(preferido) else None   # el consentimiento se abre ahí
+            cred = flujo.run_local_server(port=0, browser=nav)
         token_file.write_text(cred.to_json())
     return build("docs", "v1", credentials=cred, cache_discovery=False)
 
@@ -147,12 +156,13 @@ def _texto_celda(celda):
 
 def aplicar(servicio, url, acciones):
     """Escribe las acciones ACTUALIZAR. Relee el doc y verifica que la fila siga siendo
-    el mismo paciente antes de escribir. Devuelve (escritas, omitidas)."""
+    el mismo paciente antes de escribir. No toca el formato: el texto hereda el estilo de la celda.
+    Devuelve (escritas: list[Accion], omitidas: list[(Accion, motivo)])."""
     doc_id = id_documento(url)
     doc = servicio.documents().get(documentId=doc_id).execute()
     tablas = [e["table"] for e in doc["body"]["content"] if "table" in e]
     # índice de tabla en la API = posición entre tablas del documento (igual que en el HTML)
-    reqs, escritas, omitidas = [], 0, []
+    reqs, escritas, omitidas = [], [], []
     for a in acciones:
         f = a.fila
         try:
@@ -160,11 +170,11 @@ def aplicar(servicio, url, acciones):
             celdas = fila["tableCells"]
             nombre_actual = _texto_celda(celdas[0]).split("\n")[0].strip()
             if nombre_actual.upper() != f.nombre.upper():
-                omitidas.append(f"{a.paciente} ({a.campo}): la fila cambió (ahora «{nombre_actual}»)")
+                omitidas.append((a, f"La fila cambió (ahora dice «{nombre_actual}»)"))
                 continue
             c = celdas[_COL[a.campo]]
         except (IndexError, KeyError):
-            omitidas.append(f"{a.paciente} ({a.campo}): no se encontró la celda")
+            omitidas.append((a, "No se encontró la celda"))
             continue
         contenido = c["content"]
         ini = contenido[0]["startIndex"]
@@ -173,15 +183,8 @@ def aplicar(servicio, url, acciones):
         if fin > ini:
             sub.append({"deleteContentRange": {"range": {"startIndex": ini, "endIndex": fin}}})
         sub.append({"insertText": {"location": {"index": ini}, "text": a.nuevo}})
-        fin_nuevo = ini + len(a.nuevo)
-        sub.append({"updateTextStyle": {
-            "range": {"startIndex": ini, "endIndex": fin_nuevo},
-            "textStyle": {"bold": False}, "fields": "bold"}})
-        sub.append({"updateParagraphStyle": {
-            "range": {"startIndex": ini, "endIndex": fin_nuevo},
-            "paragraphStyle": {"namedStyleType": "NORMAL_TEXT"}, "fields": "namedStyleType"}})
         reqs.append((ini, sub))
-        escritas += 1
+        escritas.append(a)
     # de abajo hacia arriba para que los índices no se desplacen
     plano = [r for _, sub in sorted(reqs, key=lambda x: -x[0]) for r in sub]
     if plano:

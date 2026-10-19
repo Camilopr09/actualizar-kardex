@@ -49,6 +49,8 @@ class Accion:
     fila: object = None
     detalle: str = ""
     marcada: bool = True
+    servicio: str = ""
+    habitacion: str = ""
 
     @property
     def automatica(self):
@@ -80,6 +82,17 @@ def _igual(a, b):
     return normalizar(a) == normalizar(b)
 
 
+def _resumen(nombre, habitacion, dx="", fecha="", medico=""):
+    """Texto corto de un paciente: «NOMBRE · HAB», DX y última evolución."""
+    lineas = [" · ".join(x for x in (nombre, habitacion) if x)]
+    if dx:
+        lineas.append("DX: " + dx.replace("\n", " · "))
+    ev = ", ".join(x for x in (fecha, medico) if x)
+    if ev:
+        lineas.append("Última evolución: " + ev)
+    return "\n".join(lineas)
+
+
 def comparar(sistema, kardex):
     """Devuelve lista de Accion. sistema: list[PacienteSistema], kardex: list[FilaKardex]."""
     acciones = []
@@ -88,17 +101,19 @@ def comparar(sistema, kardex):
     for fila in kardex:
         nom = emparejar(fila.nombre, por_nombre.keys())
         if not nom:
-            acciones.append(Accion("RETIRAR", fila.nombre, detalle=
-                f"No aparece en el sistema (¿alta?). Está en {fila.servicio}.", fila=fila, marcada=False))
+            acciones.append(Accion("RETIRAR", fila.nombre, "", _resumen(fila.nombre, fila.habitacion, fila.dx), "",
+                                   fila, f"No aparece en el sistema (¿alta?). Está en {fila.servicio}.",
+                                   marcada=False, servicio=fila.servicio, habitacion=fila.habitacion))
             continue
         usados.add(nom)
         p = por_nombre[nom]
         if p.aviso:
-            acciones.append(Accion("REVISAR", fila.nombre, detalle=p.aviso, fila=fila, marcada=False))
+            acciones.append(Accion("REVISAR", fila.nombre, detalle=p.aviso, fila=fila, marcada=False,
+                                   servicio=fila.servicio, habitacion=fila.habitacion))
         if p.habitacion and fila.habitacion and not _igual(p.habitacion, fila.habitacion):
             acciones.append(Accion("REVISAR", fila.nombre, "HABITACIÓN", fila.habitacion, p.habitacion,
                                    fila, "Habitación distinta (cambiar a mano; puede requerir mover de servicio)",
-                                   marcada=False))
+                                   marcada=False, servicio=fila.servicio, habitacion=fila.habitacion))
         if not p.encontrado_detalle:
             continue
         for campo, nuevo, actual in (("DX", p.dx, fila.dx),
@@ -106,10 +121,10 @@ def comparar(sistema, kardex):
                                      ("TRATAMIENTO", p.tratamiento, fila.tratamiento)):
             if nuevo and not _igual(nuevo, actual):
                 acciones.append(Accion("ACTUALIZAR", fila.nombre, campo, actual, nuevo, fila,
-                                       f"{fila.servicio}"))
+                                       f"{fila.servicio}", servicio=fila.servicio, habitacion=fila.habitacion))
     for nom, p in por_nombre.items():
         if nom not in usados:
-            acciones.append(Accion("AGREGAR", p.nombre, "", "", f"{p.dx}\n{p.evolucion}\n{p.tratamiento}".strip(),
+            acciones.append(Accion("AGREGAR", p.nombre, "", "", _resumen(p.nombre, p.habitacion, p.dx, p.fecha, p.medico),
                                    None, f"En el sistema ({p.modo}, {p.habitacion}) y no en el kardex",
-                                   marcada=False))
+                                   marcada=False, servicio=p.modo, habitacion=p.habitacion))
     return acciones
