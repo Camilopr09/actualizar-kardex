@@ -14,7 +14,7 @@ usa el navegador que elijas en Ajustes. Edge ya no se usa.
 - Obtener el `.exe`: en GitHub → pestaña **Actions** → «Actualizar Kardex (.exe para Windows)» → *Run workflow* → descargar el artefacto `Actualizar-Kardex-Windows`. (O ejecutar `construir.bat` en un Windows con Python.)
 
 ## Uso
-1. **Primer uso**: la app te guía: se abre el navegador con dos pestañas; entra a Hospital Office y a tu cuenta de Google; cierra el navegador. Queda guardado en `%LOCALAPPDATA%\ActualizarKardex\perfil-chrome` (o `perfil-brave`).
+1. **Primer uso**: la app te guía: se abre el navegador con dos pestañas; entra a Hospital Office y a tu cuenta de Google. La app lo detecta (verás «✓ dentro» para cada uno) y guarda la sesión sola; también puedes pulsar «Guardar sesión ahora» o cerrar el navegador. Queda guardado en `%LOCALAPPDATA%\ActualizarKardex\perfil-chrome` (o `perfil-brave`).
 2. **Analizar**: la app lee el kardex y la Agenda, abre la historia de cada paciente del kardex y arma la lista. Se abre el navegador de automatización; no lo cierres. Puedes cancelar.
 3. Revisa las pestañas. En «Qué hay que actualizar» selecciona una fila para ver *Ahora* vs *Nuevo*; desmarca lo que no quieras. **Copiar texto nuevo** sirve para pegar a mano.
 4. **Escribir en el kardex** (opcional, ver abajo). Deshacer: Archivo → Historial de versiones del Google Doc.

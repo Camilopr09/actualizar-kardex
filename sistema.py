@@ -22,7 +22,8 @@ def abrir_contexto(pw, carpeta, preferido, log):
         raise ErrorApp("navegador", "No encontré Chrome ni Brave. Instala uno de los dos.")
     if nombre != preferido:
         log(f"No encontré {preferido.capitalize()}; uso {nombre.capitalize()}.")
-    args = ["--start-maximized", "--disable-blink-features=AutomationControlled"]
+    args = ["--start-maximized", "--disable-blink-features=AutomationControlled",
+            "--disable-background-mode"]
     sin_ventana = os.environ.get("KARDEX_HEADLESS") == "1"     # solo para pruebas automáticas
     if sin_ventana:
         args.append("--no-sandbox")
@@ -33,6 +34,16 @@ def abrir_contexto(pw, carpeta, preferido, log):
             args=args)
     except Exception as e:  # noqa: BLE001
         raise ErrorApp("navegador", f"No pude abrir {nombre.capitalize()}: {_primera_linea(e)}") from e
+
+
+def pagina_pide_login(page):
+    """True si la página es un inicio de sesión (URL con «login» o campo de contraseña visible)."""
+    if "login" in page.url.lower():
+        return True
+    try:
+        return page.locator("input[type=password]").first.is_visible(timeout=500)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _primera_linea(e):
@@ -90,12 +101,7 @@ class Sistema:
     # ------------------------------------------------------------ agenda
     def _pide_login(self):
         """True si la página actual es un inicio de sesión."""
-        if "login" in self.page.url.lower():
-            return True
-        try:
-            return self.page.locator("input[type=password]").first.is_visible(timeout=500)
-        except Exception:  # noqa: BLE001
-            return False
+        return pagina_pide_login(self.page)
 
     def ir_agenda(self):
         self.page.goto(self.cfg["url_agenda"], wait_until="domcontentloaded")

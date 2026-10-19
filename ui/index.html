@@ -268,7 +268,7 @@ function renderScene(full){
   renderChrome();
   switch(S.scene){
     case 'main':renderMain(full);break;
-    case 'login':{const E=S.E,sig=[E.tarea&&E.tarea.tipo,E.sesion_guardada,E.config.navegador].join('|');if(full||sig!==loginSig){loginSig=sig;renderLogin();}break;}
+    case 'login':{const E=S.E,sp=E.sesion_pasos||{},sig=[E.tarea&&E.tarea.tipo,E.sesion_guardada,E.config.navegador,sp.hospital,sp.google].join('|');if(full||sig!==loginSig){loginSig=sig;renderLogin();}break;}
     case 'analyzing':renderAnalyzing();break;
     case 'result':if(full)renderResult();break;
     case 'done':if(full)renderDone();break;
@@ -331,7 +331,7 @@ function finTarea(u){
   }else if(u.tipo==='escribir'){
     if(u.fin==='ok'){S.scene='done';$('toast').hidden=true;}
   }else if(u.tipo==='sesion'){
-    if(u.fin==='ok')say('Sesión guardada.');
+    if(u.fin==='ok')say('Sesión guardada');
   }
 }
 function syncResultado(newAnalN){
@@ -592,6 +592,7 @@ async function saveKardexUrl(){
 function goLogin(){setScene('login');}
 async function doAnalyze(){
   if(!S.E)return;
+  if(S.E.tarea&&S.E.tarea.tipo==='sesion'){say('Aún está abierta la sesión. Pulsa «Guardar sesión ahora» para continuar.');setScene('login');return;}
   if(!S.E.sesion_guardada){say('Primero inicia sesión (paso 1).');setScene('login');return;}
   if(!(await saveKardexUrl()))return;
   const r=await call('/api/analizar',{});
@@ -669,14 +670,16 @@ function renderLogin(){
   const run=E.tarea&&E.tarea.tipo==='sesion';
   const saved=E.sesion_guardada;
   const nav=E.config.navegador==='brave'?'Brave':'Chrome';
+  const sp=E.sesion_pasos||{};
+  const both=!!(sp.hospital&&sp.google);
   let st; // estados por paso: [done, status, primary, disabled]
-  if(run)st=[[true,'Hecho',false,true],[false,'En curso',false,true],[false,'Esperando…',false,true]];
+  if(run)st=[[true,'Hecho',false,true],[both,both?'Hecho':'En curso',false,true],[false,'Esperando…',false,false]];
   else if(saved)st=[[true,'Hecho',false,false],[true,'Hecho',false,true],[true,'Hecho',false,true]];
   else st=[[false,'Siguiente paso',true,false],[false,'Pendiente',false,true],[false,'Pendiente',false,true]];
   const steps=[
     ['Abre el navegador','Se abre '+nav+' con la Agenda de Hospital Office y el kardex en dos pestañas. Usa solo esa ventana.','Abrir '+nav+(saved&&!run?' de nuevo':'')],
     ['Entra a Hospital Office y a Google','En cada pestaña escribe tu usuario y contraseña (Hospital Office) y elige la cuenta de Google que puede abrir el kardex. Espera a ver la Agenda y el documento.',null],
-    ['Cierra el navegador','Cierra la ventana del navegador. Al cerrarla, la sesión queda guardada para la próxima vez.',null]
+    ['Guardar sesión','Se guarda sola cuando detecto que entraste a los dos. También puedes pulsar el botón o cerrar el navegador.','Guardar sesión ahora']
   ];
   const sw=h('div',{class:'tag','data-t':saved?'ACTUALIZAR':'RETIRAR',style:'height:36px;font-size:15px;padding:0 14px'},h('span',{'aria-hidden':'true',text:saved?'✓':'✕'}),saved?'Sesión guardada':'Sin sesión guardada');
   clear(box);
@@ -691,10 +694,13 @@ function renderLogin(){
         h('div',{'aria-hidden':'true',style:'flex:none;width:48px;height:48px;border-radius:24px;background:var(--ink);color:var(--surface);font-size:22px;font-weight:700;display:flex;align-items:center;justify-content:center',text:s[0]?'✓':String(i+1)}),
         h('div',{style:'flex:1;min-width:0'},
           h('div',{style:'font-size:20px;font-weight:700',text:'Paso '+(i+1)+'. '+p[0]}),
-          h('div',{style:'font-size:16px;line-height:1.45;color:var(--mut);margin-top:2px',text:p[1]})),
+          h('div',{style:'font-size:16px;line-height:1.45;color:var(--mut);margin-top:2px',text:p[1]}),
+          i===1&&run?h('div',{style:'font-size:16px;font-weight:700;margin-top:6px;display:flex;gap:24px;flex-wrap:wrap'},
+            h('span',{text:'Hospital Office: '+(sp.hospital?'✓ dentro':'esperando…')}),
+            h('span',{text:'Google: '+(sp.google?'✓ dentro':'esperando…')})):null),
         h('div',{style:'flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:6px'},
           h('span',{style:'font-size:14px;font-weight:700',text:s[1]}),
-          p[2]?h('button',{class:'btn'+(s[2]?' pri':''),type:'button','aria-disabled':s[3]?'true':'false',onclick:()=>{if(!s[3])startSesion();}},p[2]):null));
+          p[2]?h('button',{class:'btn'+(s[2]?' pri':''),type:'button','aria-disabled':s[3]?'true':'false',onclick:()=>{if(!s[3])(i===2?terminarSesion:startSesion)();}},p[2]):null));
     }),
     h('div',{style:'display:flex;align-items:center;gap:14px;margin-top:2px'},
       ico('lock',22,'var(--ink)',2),
@@ -704,6 +710,12 @@ function renderLogin(){
 async function startSesion(){
   const r=await call('/api/sesion',{});
   if(!r.ok){say(r.data.mensaje||'No se pudo abrir el navegador.');return;}
+  poll();
+}
+
+async function terminarSesion(){
+  const r=await call('/api/sesion/terminar',{});
+  if(!r.ok){say(r.data.mensaje||'No se pudo guardar la sesión.');return;}
   poll();
 }
 

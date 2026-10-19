@@ -39,6 +39,8 @@ class Servidor:
         self.cfg = flujo.cargar_config()
         self.lock = threading.RLock()
         self.cancel = threading.Event()
+        self.sesion_terminar = threading.Event()
+        self.sesion_pasos = {"hospital": False, "google": False}
         self.salir = threading.Event()
         self.tarea = None
         self.ultima = None
@@ -135,6 +137,7 @@ class Servidor:
                 "navegadores": self._navegadores(),
                 "sesion_guardada": bool(self.backend.sesion_guardada(self.cfg)),
                 "credenciales": bool(self.backend.credenciales_ok()),
+                "sesion_pasos": dict(self.sesion_pasos),
                 "tarea": {"tipo": self.tarea} if self.tarea else None,
                 "ultima": dict(self.ultima) if self.ultima else None,
                 "progreso": dict(self.progreso),
@@ -154,6 +157,9 @@ class Servidor:
             self.cancel.clear()
             if tipo == "escribir":
                 self.escritura = None
+            if tipo == "sesion":
+                self.sesion_pasos = {"hospital": False, "google": False}
+                self.sesion_terminar.clear()
             if tipo == "analizar":
                 self.progreso = {"actual": 0, "total": 0, "paciente": ""}
         threading.Thread(target=self._correr, args=(tipo, trabajo, al_terminar), daemon=True).start()
@@ -189,7 +195,12 @@ class Servidor:
 
     def tarea_sesion(self):
         cfg = dict(self.cfg)
-        return self.lanzar("sesion", lambda: self.backend.iniciar_sesion(cfg, self.log))
+
+        def pasos(estado):
+            with self.lock:
+                self.sesion_pasos = {"hospital": bool(estado.get("hospital")), "google": bool(estado.get("google"))}
+        return self.lanzar("sesion", lambda: self.backend.iniciar_sesion(
+            cfg, self.log, pasos, self.sesion_terminar.is_set))
 
     def tarea_analizar(self):
         cfg = dict(self.cfg)
@@ -375,7 +386,7 @@ class _Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError) as e:
             return self._fallo(400, f"Solicitud inválida: {e}")
         accion = {
-            "/api/config": self._config, "/api/sesion": self._sesion, "/api/analizar": self._analizar,
+            "/api/config": self._config, "/api/sesion": self._sesion, "/api/sesion/terminar": self._sesion_terminar, "/api/analizar": self._analizar,
             "/api/cancelar": self._cancelar, "/api/escribir": self._escribir, "/api/abrir": self._abrir,
             "/api/credenciales": self._credenciales, "/api/credenciales/quitar": self._quitar,
             "/api/salir": self._salir,
@@ -395,6 +406,10 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _sesion(self, _):
         self._json(200, {"ok": True}) if self.app.tarea_sesion() else self._ocupado()
+
+    def _sesion_terminar(self, _):
+        self.app.sesion_terminar.set()
+        self._json(200, {"ok": True})
 
     def _analizar(self, _):
         self._json(200, {"ok": True}) if self.app.tarea_analizar() else self._ocupado()

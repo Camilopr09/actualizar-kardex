@@ -132,3 +132,31 @@ def test_agenda_sin_grillas_en_el_listado_es_error_de_agenda():
         with pytest.raises(ErrorApp) as e:
             _analizar(sim)
     assert e.value.codigo == "agenda"
+
+
+def _sesion(sim, **kw):
+    pasos = []
+    flujo.iniciar_sesion(_cfg(sim), lambda m: None, pasos.append, **kw)
+    return pasos
+
+
+def test_iniciar_sesion_detecta_hospital_y_termina_con_terminar():
+    with Simulador() as sim:
+        llamadas = []
+
+        def terminar():
+            llamadas.append(1)
+            return len(llamadas) > 4
+        pasos = _sesion(sim, terminar=terminar)
+    assert pasos[-1]["hospital"] is True and pasos[-1]["google"] is False
+
+
+def test_iniciar_sesion_con_login_no_cuenta_hospital():
+    with Simulador(modo_login="redirigir") as sim:
+        llamadas = []
+
+        def terminar():
+            llamadas.append(1)
+            return len(llamadas) > 3
+        pasos = _sesion(sim, terminar=terminar)
+    assert all(p == {"hospital": False, "google": False} for p in pasos)

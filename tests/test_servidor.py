@@ -87,6 +87,7 @@ def test_estado_inicial(c):
     assert set(e["config"]) >= {"url_kardex", "url_agenda", "especialistas", "navegador"}
     assert set(e["navegadores"]) == {"chrome", "brave"}
     assert e["sesion_guardada"] is False and e["credenciales"] is True
+    assert e["sesion_pasos"] == {"hospital": False, "google": False}
     assert e["tarea"] is None and e["ultima"] is None and e["resultado"] is None
     assert e["escritura"] is None and e["error"] is None
     assert e["progreso"] == {"actual": 0, "total": 0, "paciente": ""}
@@ -117,6 +118,7 @@ def test_flujo_completo(c):
     e = c.esperar_fin(n)
     n = e["ultima"]["n"]
     assert e["ultima"] == {"n": 1, "tipo": "sesion", "fin": "ok"} and e["sesion_guardada"] is True
+    assert e["sesion_pasos"] == {"hospital": True, "google": True}
 
     assert c.post("/api/analizar")[1] == {"ok": True}
     e = c.esperar_fin(n)
@@ -263,3 +265,11 @@ def test_carpeta_ui_con_pyinstaller(tmp_path, monkeypatch):
         assert b"empaquetada" in Cliente(s).get("/", token=False)[1]
     finally:
         s.detener()
+
+
+def test_sesion_terminar_corta_la_tarea(c, monkeypatch):
+    monkeypatch.setattr(demo, "PAUSA_SESION", 60.0)
+    assert c.post("/api/sesion")[1] == {"ok": True}
+    assert c.post("/api/sesion/terminar")[1] == {"ok": True}
+    e = c.esperar_fin(0)
+    assert e["ultima"] == {"n": 1, "tipo": "sesion", "fin": "ok"} and e["sesion_guardada"] is True

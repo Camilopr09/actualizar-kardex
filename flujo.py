@@ -63,23 +63,80 @@ def credenciales_ok():
     return (carpeta_datos() / "credentials.json").exists()
 
 
-def iniciar_sesion(cfg, log):
-    """Abre el navegador para que la persona inicie sesión; termina cuando lo cierra."""
-    from playwright.sync_api import sync_playwright
+def _revisar_sesion(ctx, host_agenda):
+    """Mira todas las páginas abiertas. Devuelve {"hospital": bool, "google": bool}."""
     import sistema
+    from urllib.parse import urlparse
+    hospital = google = False
+    try:
+        paginas = list(ctx.pages)
+    except Exception:  # noqa: BLE001
+        return {"hospital": False, "google": False}
+    for pg in paginas:
+        try:
+            url = pg.url
+            host = (urlparse(url).hostname or "").lower()
+            if host and host == host_agenda and not hospital:
+                # solo cuenta si ya se ve la Agenda: una pantalla de login a medio cargar
+                # no debe cerrar el navegador antes de tiempo
+                if (not sistema.pagina_pide_login(pg)
+                        and pg.locator(f"#{sistema.GRID_PEND}, #{sistema.GRID_ATEN}").count() > 0):
+                    hospital = True
+            elif (host in ("docs.google.com", "drive.google.com")
+                  or host.endswith((".docs.google.com", ".drive.google.com"))):
+                google = True
+        except Exception:  # noqa: BLE001  (la página se cerró o navegó durante la revisión)
+            continue
+    return {"hospital": hospital, "google": google}
+
+
+def iniciar_sesion(cfg, log, pasos=lambda estado: None, terminar=lambda: False):
+    """Abre el navegador para que la persona inicie sesión. Termina cuando detecta que entró a
+    Hospital Office y a Google (3 revisiones seguidas), cuando terminar() es True o cuando cierra el navegador.
+    pasos({"hospital": bool, "google": bool}) se llama cada vez que cambia."""
+    from playwright.sync_api import sync_playwright
+    from urllib.parse import urlparse
+    import sistema
+    host_agenda = (urlparse(cfg["url_agenda"]).hostname or "").lower()
     with sync_playwright() as pw:
         ctx = sistema.abrir_contexto(pw, carpeta_datos(), _preferido(cfg), log)
         p1 = ctx.pages[0] if ctx.pages else ctx.new_page()
         p1.goto(cfg["url_agenda"])
         ctx.new_page().goto(cfg["url_kardex"])
-        log("Inicia sesión en Hospital Office (pestaña 1) y en Google (pestaña 2). Luego CIERRA el navegador.")
+        log("Inicia sesión en Hospital Office (pestaña 1) y en Google (pestaña 2). "
+            "Se guarda sola cuando detecte que entraste a los dos.")
+        cerrado = []
+        ctx.on("close", lambda *_: cerrado.append(1))
+        ultimo, seguidas = {"hospital": False, "google": False}, 0
+        pasos(dict(ultimo))
         while True:
             try:
-                if not ctx.pages:
-                    break
+                abiertas = [pg for pg in ctx.pages if not pg.is_closed()]
             except Exception:  # noqa: BLE001
+                abiertas = []
+            if cerrado or not abiertas:
+                log("Sesiones guardadas.")
+                return
+            if terminar():
+                faltan = [n for n, k in (("Hospital Office", "hospital"), ("Google", "google")) if not ultimo[k]]
+                if faltan:
+                    log("Guardo la sesión, pero no detecté que entraras a " + " ni a ".join(faltan) + ".")
+                else:
+                    log("Guardo la sesión…")
+                break
+            estado = _revisar_sesion(ctx, host_agenda)
+            if estado != ultimo:
+                ultimo = estado
+                pasos(dict(estado))
+            seguidas = seguidas + 1 if (estado["hospital"] and estado["google"]) else 0
+            if seguidas >= 3:
+                log("Detecté que ya entraste a Hospital Office y a Google. Guardo la sesión…")
                 break
             time.sleep(1)
+        try:
+            ctx.close()
+        except Exception:  # noqa: BLE001
+            pass
     log("Sesiones guardadas.")
 
 

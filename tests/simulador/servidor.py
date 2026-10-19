@@ -242,7 +242,7 @@ class Simulador:
 
     @property
     def url_kardex(self):
-        return f"{self.base}/kardex"
+        return f"http://localhost:{self.puerto}/kardex"
 
     def _handler(self):
         sim = self

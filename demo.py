@@ -6,6 +6,8 @@ from comparar import FilaKardex, PacienteSistema, comparar, emparejar
 from errores import Cancelado
 
 PAUSA_SESION = 3.0     # segundos que «dura» iniciar sesión
+PAUSA_HOSPITAL = 1.0   # a los cuántos segundos «entra» a Hospital Office
+PAUSA_GOOGLE = 2.0
 PAUSA_PACIENTE = 0.2   # segundos por paciente al analizar
 PAUSA_ESCRIBIR = 0.8
 
@@ -88,9 +90,19 @@ class Demo:
     def credenciales_ok(self):
         return True
 
-    def iniciar_sesion(self, cfg, log):
+    def iniciar_sesion(self, cfg, log, pasos=lambda estado: None, terminar=lambda: False):
         log("Modo demostración: simulo el inicio de sesión…")
-        time.sleep(PAUSA_SESION)
+        estado = {"hospital": False, "google": False}
+        pasos(dict(estado))
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < PAUSA_SESION and not terminar():
+            for clave, cuando in (("hospital", PAUSA_HOSPITAL), ("google", PAUSA_GOOGLE)):
+                if not estado[clave] and time.monotonic() - t0 >= cuando:
+                    estado[clave] = True
+                    pasos(dict(estado))
+            time.sleep(0.05)
+        if not terminar() and not all(estado.values()):
+            pasos({"hospital": True, "google": True})
         self._sesion = True
         log("Sesiones guardadas.")
 

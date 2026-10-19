@@ -121,7 +121,8 @@ def test_recorrido_completo(app, tmp_path):
         # ---- Sesión (demo): En curso -> Hecho
         page.get_by_role("button", name="Abrir Chrome").click()
         expect(page.get_by_text("En curso")).to_be_visible()
-        expect(page.get_by_text("Esperando…")).to_be_visible()
+        expect(page.get_by_text("Hospital Office: ✓ dentro")).to_be_visible(timeout=10000)
+        expect(page.get_by_text("Google: ✓ dentro")).to_be_visible(timeout=10000)
         foto(page, "03-sesion-en-curso")
         expect(page.locator("#sc-login").get_by_text("Sesión guardada")).to_be_visible(timeout=15000)
         expect(page.locator("#sesText")).to_have_text("Sesión guardada")
