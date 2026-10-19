@@ -13,18 +13,20 @@ PLAN 1. DIETA LIQUIDA 2. CEFAZOLINA 1 G IV"""
 def test_evolucion():
     r = interpretar_evolucion(NOTA, "16/10/2026", "CARLOS DAZA")
     assert "COLECISTITIS" in r["dx"] and "EXAMEN" not in r["dx"]
-    assert r["evolucion"].startswith("16/10/2026 CARLOS DAZA:")
+    assert r["evolucion"].startswith("16/10/2026 - DR. CARLOS DAZA (CX GENERAL)\n")
     assert r["plan"].startswith("1. DIETA LIQUIDA")
     # el texto de la evolución arranca justo después del DX (sin restos de él)
-    assert r["evolucion"] == "16/10/2026 CARLOS DAZA: EXAMEN FISICO: ALERTA, ABDOMEN BLANDO ANALISIS: BUENA EVOLUCION"
+    assert r["evolucion"] == ("16/10/2026 - DR. CARLOS DAZA (CX GENERAL)\n"
+                              "EXAMEN FISICO: ALERTA, ABDOMEN BLANDO ANALISIS: BUENA EVOLUCION")
 
 def test_ordenes_y_tratamiento():
     o = interpretar_ordenes("DIETA LIQUIDA\nFórmula #1\n1) CEFAZOLINA 1G Cantidad: 3 Dosis: 1 g IV c/8h\n")
     assert o == ["DIETA LIQUIDA", "CEFAZOLINA 1G — 1 g IV c/8h"]
     assert es_igual_manejo("IGUAL MANEJO")
-    t = construir_tratamiento("IGUAL MANEJO", o, "DIETA LIQUIDA\nOMEPRAZOL 20 MG")
-    assert t.splitlines() == ["DIETA LIQUIDA", "OMEPRAZOL 20 MG", "CEFAZOLINA 1G — 1 g IV c/8h"]
-    assert construir_tratamiento("1. X", o, "viejo") == "1. X"
+    t = construir_tratamiento("IGUAL MANEJO", o, "PLAN\nDIETA LIQUIDA\nOMEPRAZOL 20 MG", "DAZA PEREZ JUAN", "16/10/2026 06:30")
+    assert t.splitlines() == ["IGUAL MANEJO (DR. DAZA PEREZ JUAN 16/10/2026)", "DIETA LIQUIDA", "OMEPRAZOL 20 MG",
+                              "CEFAZOLINA 1G — 1 G IV C/8H"]
+    assert construir_tratamiento("1. x", o, "viejo") == "PLAN\n1. X"
 
 def test_emparejar():
     assert emparejar("Juan  Pérez", ["PEREZ GOMEZ JUAN CARLOS", "OTRO NOMBRE"]) == "PEREZ GOMEZ JUAN CARLOS"

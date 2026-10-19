@@ -115,7 +115,7 @@ class Demo:
         por_nombre = {p.nombre: p for p in sistema}
         pares = []
         for f in kardex:
-            nom = emparejar(f.nombre, por_nombre.keys())
+            nom = emparejar(f.nombre, por_nombre.keys(), f.documento)
             if nom:
                 pares.append(nom)
         for i, nom in enumerate(pares, 1):

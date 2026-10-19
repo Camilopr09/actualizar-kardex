@@ -48,22 +48,25 @@ def test_analizar_contra_el_simulador():
     # ---- ALVARADO: toma la hoja del ESPECIALISTA más reciente (no la de enfermería, más nueva)
     a = por["ALVARADO RUIZ PEDRO PABLO"]
     assert a.encontrado_detalle and not a.aviso
-    assert a.dx == "1. COLECISTITIS AGUDA 2. HTA"
+    assert a.dx == "1. COLECISTITIS AGUDA\n2. HTA"
     assert a.medico == "DAZA PEREZ JUAN" and a.fecha == "19/10/2026 06:30"
-    assert a.evolucion == "19/10/2026 DAZA PEREZ JUAN: EXAMEN FISICO: ALERTA, SIN DOLOR ANALISIS: EVOLUCION FAVORABLE"
+    assert a.evolucion == ("19/10/2026 - DR. DAZA PEREZ JUAN (MEDICINA INTERNA)\n"
+                           "EXAMEN FISICO: ALERTA, SIN DOLOR ANALISIS: EVOLUCION FAVORABLE")
     assert "NO DEBE LEERSE" not in a.tratamiento and "OTRO DX" not in a.dx
     # PLAN sin «igual manejo»: el tratamiento es el plan tal cual
-    assert a.tratamiento == "1. DIETA LIQUIDA 2. CEFAZOLINA 1 G IV C/8H 3. OMEPRAZOL 40 MG IV C/24H"
+    assert a.tratamiento == "PLAN\n1. DIETA LIQUIDA\n2. CEFAZOLINA 1 G IV C/8H\n3. OMEPRAZOL 40 MG IV C/24H"
     for campo in ("DX", "EVOLUCIÓN", "TRATAMIENTO"):
         act = _acc(acciones, "PEDRO ALVARADO", "ACTUALIZAR", campo)
-        assert len(act) == 1 and act[0].automatica and act[0].nuevo == getattr(
-            a, {"DX": "dx", "EVOLUCIÓN": "evolucion", "TRATAMIENTO": "tratamiento"}[campo])
+        assert len(act) == 1 and act[0].automatica and act[0].nuevo == {
+            "DX": "DX:\n" + a.dx, "EVOLUCIÓN": a.evolucion, "TRATAMIENTO": a.tratamiento}[campo]
 
     # ---- BENAVIDES: IGUAL MANEJO conserva el tratamiento del kardex y suma lo nuevo de las órdenes
     b = por["BENAVIDES LUNA SOFIA"]
-    assert b.tratamiento.splitlines() == ["NVO", "CEFTRIAXONA 2 G — 2 g IV c/24h", "DIETA BLANDA",
-                                          "ENOXAPARINA 40 MG — 40 mg SC c/24h"]
-    assert _acc(acciones, "SOFIA BENAVIDES LUNA", "ACTUALIZAR", "TRATAMIENTO")
+    assert b.tratamiento.splitlines() == ["IGUAL MANEJO (DR. FABIAN GOMEZ LUIS 19/10/2026)", "NVO",
+                                          "CEFTRIAXONA 2 G — 2 G IV C/24H", "DIETA BLANDA",
+                                          "ENOXAPARINA 40 MG — 40 MG SC C/24H"]
+    (bt,) = _acc(acciones, "SOFIA BENAVIDES LUNA", "ACTUALIZAR", "TRATAMIENTO")
+    assert bt.nuevo == b.tratamiento and bt.actual.splitlines()[0] == "PLAN"
     assert not _acc(acciones, "SOFIA BENAVIDES LUNA", "ACTUALIZAR", "DX")      # el DX ya coincide
 
     # ---- CORREA: kardex al día -> ninguna acción

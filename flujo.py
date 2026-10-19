@@ -149,10 +149,13 @@ def analizar(cfg, log, progreso, cancelado):
         ctx = sistema.abrir_contexto(pw, carpeta_datos(), _preferido(cfg), log)
         try:
             log("Leyendo el kardex…")
-            kardex = kardex_doc.parsear_kardex_html(kardex_doc.descargar_html(ctx, cfg["url_kardex"]))
+            html = kardex_doc.descargar_html(ctx, cfg["url_kardex"])
+            kardex = kardex_doc.parsear_kardex_html(html)
             if not kardex:
-                raise ErrorApp("kardex", "El documento no trae ninguna tabla con encabezado DATOS. "
-                                         "Revisa que el enlace sea el del KARDEX.")
+                n, primera = kardex_doc.describir_tablas(html)
+                raise ErrorApp("kardex", "El documento no trae ninguna tabla con encabezado DATOS "
+                                         f"(tablas encontradas: {n}; primera celda de la primera tabla: «{primera}»). "
+                                         "Revisa que el enlace sea el del KARDEX y la pestaña correcta.")
             log(f"Kardex: {len(kardex)} pacientes")
             s = sistema.Sistema(ctx, cfg, log, carpeta_datos() / "diagnostico")
             log("Leyendo la Agenda de Hospital Office…")
@@ -161,7 +164,7 @@ def analizar(cfg, log, progreso, cancelado):
             por_nombre = {p.nombre: p for p in pacientes}
             filas = {}
             for f in kardex:
-                nom = emparejar(f.nombre, por_nombre.keys())
+                nom = emparejar(f.nombre, por_nombre.keys(), f.documento)
                 if nom:
                     filas[nom] = f
             for i, (nom, f) in enumerate(filas.items(), 1):

@@ -71,7 +71,7 @@ KARDEX = [
     ]),
     ("URGENCIAS", [
         ("TOMAS CORREA MEJIA", "U-03", "PIELONEFRITIS AGUDA",
-         "19/10/2026 EMILIANI RUEDA CARLOS: EXAMEN FISICO: ALERTA, SIN DOLOR ANALISIS: EVOLUCION FAVORABLE",
+         "19/10/2026 - DR. EMILIANI RUEDA CARLOS (MEDICINA INTERNA)\nEXAMEN FISICO: ALERTA, SIN DOLOR ANALISIS: EVOLUCION FAVORABLE",
          "1. DIETA BLANDA 2. CIPROFLOXACINO 400 MG IV C/12H"),     # igual a lo del sistema: sin acciones
         ("ELSA FIGUEROA PARDO", "U-09", "HERNIA INGUINAL", "ev", "DIETA"),     # ya no está en el sistema
     ]),
@@ -199,15 +199,30 @@ pintar();
                               "formatos": json.dumps(FORMATOS[pid])}
 
 
+def _parrafos(lineas):
+    return "".join(f"<p>{html.escape(l)}</p>" for l in lineas)
+
+
 def pagina_kardex():
+    """Estructura real del Google Doc: fila 0 = título (colspan 7), fila 1 = encabezados,
+    luego pacientes. DATOS: habitación, nombre en 1-3 renglones, vacío, edad, vacío, «CC n».
+    DX empieza con «DX:» y TRATAMIENTO con «PLAN»."""
     partes = ["<html><head><style>p{margin:0}</style></head><body><h1>KARDEX MIS PX</h1>"]
+    n = 0
     for servicio, filas in KARDEX:
-        partes.append(f"<p>{html.escape(servicio)}</p><table><tr><td><p>DATOS</p></td><td>DX</td><td>EVOLUCIÓN</td>"
-                      "<td>TRATAMIENTO</td><td>LAB</td><td>IMG</td><td>PEND</td></tr>")
+        partes.append(f'<table><tr><td colspan="7"><p>{html.escape(servicio)} ( {len(filas)} PACIENTES)</p></td></tr>'
+                      "<tr><td><p>DATOS</p></td><td><p>DX</p></td><td><p>EVOLUCIÓN</p></td><td><p>TRATAMIENTO</p></td>"
+                      "<td><p>LABORATORIOS</p></td><td><p>IMÁGENES / NOTAS</p></td><td><p>PENDIENTES</p></td></tr>")
         for nombre, hab, dx, ev, trat in filas:
-            t = "<br>".join(html.escape(x) for x in trat.split("\n"))
-            partes.append(f"<tr><td><p>{html.escape(nombre)}</p><p>{html.escape(hab)}</p></td><td>{html.escape(dx)}</td>"
-                          f"<td>{html.escape(ev)}</td><td>{t}</td><td></td><td></td><td></td></tr>")
+            n += 1
+            palabras = nombre.split()
+            nombre_lineas = [" ".join(palabras[i:i + 2]) for i in range(0, len(palabras), 2)]
+            datos = _parrafos([hab] + nombre_lineas) + "<p></p>" + _parrafos([f"{40 + n} AÑOS"]) \
+                + "<p></p>" + _parrafos([f"CC 9000{n:04d}"])
+            t = _parrafos(["PLAN"] + trat.split("\n"))
+            ev = ev.split("\n")
+            partes.append(f"<tr><td>{datos}</td><td>{_parrafos(['DX:', dx])}</td><td>{_parrafos(ev)}</td>"
+                          f"<td>{t}</td><td></td><td></td><td></td></tr>")
         partes.append("</table>")
     partes.append("</body></html>")
     return "".join(partes)

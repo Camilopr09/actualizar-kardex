@@ -3,9 +3,10 @@ escritura opcional con la API de Google Docs."""
 import re
 from html.parser import HTMLParser
 
-from comparar import FilaKardex
+from comparar import FilaKardex, interpretar_datos
 from errores import ErrorApp
 import navegador
+from notas import normalizar
 
 _BLOQUE = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "div"}
 
@@ -82,21 +83,74 @@ class _Parser(HTMLParser):
             self._buf.append(data)
 
 
+def _limpiar_titulo(texto):
+    """«PISO 4A ( 4 PACIENTES) 422 - 430» -> «PISO 4A»; «UCI 1  (2 PACIENTES)» -> «UCI 1»;
+    «PISO 5 (  PACIENTES)» -> «PISO 5». Quita el paréntesis de pacientes (con o sin número) y el
+    rango de habitaciones del final."""
+    t = re.sub(r"\(\s*\d*\s*PACIENTES?\s*\)", " ", texto or "", flags=re.I)
+    t = re.sub(r"\s+\d+[A-Z]?\s*-\s*\d+[A-Z]?\s*$", "", " ".join(t.split()), flags=re.I)
+    return t.strip()
+
+
+def _es_encabezado(fila):
+    return bool(fila) and " ".join(fila[0].split()).upper().startswith("DATOS")
+
+
+def columnas_por_encabezado(encabezado):
+    """{'DX': i, 'EVOLUCIÓN': i, 'TRATAMIENTO': i}; los que la tabla no tiene quedan en None."""
+    cols = {"DX": None, "EVOLUCIÓN": None, "TRATAMIENTO": None}
+    for i, c in enumerate(encabezado):
+        n = normalizar(c)
+        for campo, clave in (("DX", "DX"), ("EVOLUCIÓN", "EVOLUCION"), ("TRATAMIENTO", "TRATAMIENTO")):
+            if cols[campo] is None and n.startswith(clave):
+                cols[campo] = i
+    return cols
+
+
 def parsear_kardex_html(html):
-    """Devuelve list[FilaKardex] de todas las tablas cuyo encabezado empieza por DATOS."""
+    """Devuelve list[FilaKardex] de todas las tablas cuyo encabezado empieza por DATOS.
+    El encabezado puede ser la fila 0 o venir tras una fila de título (celda combinada) dentro
+    de la tabla; el servicio sale de ese título o, si no hay, del párrafo previo a la tabla.
+    Las columnas DX/EVOLUCIÓN/TRATAMIENTO se leen POR NOMBRE del encabezado (None si no existen).
+    FilaKardex.fila es el índice ABSOLUTO de la fila en la tabla (cuenta título y encabezado).
+    Se saltan las filas vacías; una fila con solo el nombre cuenta como paciente."""
     p = _Parser()
     p.feed(html)
     filas = []
-    for idx, (titulo, rows) in enumerate(p.tablas):
-        if not rows or not rows[0] or not rows[0][0].upper().startswith("DATOS"):
+    for idx, (previo, rows) in enumerate(p.tablas):
+        enc = next((i for i, r in enumerate(rows[:3]) if _es_encabezado(r)), None)
+        if enc is None:
             continue
-        for i, r in enumerate(rows[1:], start=1):
-            r = r + [""] * (7 - len(r))
+        titulo = ""
+        for r in rows[:enc]:
+            celdas = [c for c in r if c.strip()]
+            if len(celdas) == 1:
+                titulo = celdas[0]
+        servicio = _limpiar_titulo(titulo) or _limpiar_titulo(previo) or f"Tabla {idx+1}"
+        cols = columnas_por_encabezado(rows[enc])
+
+        def celda(r, campo):
+            c = cols[campo]
+            return r[c] if c is not None and c < len(r) else ""
+        for i, r in enumerate(rows[enc + 1:], start=enc + 1):
             if not any(c.strip() for c in r):
                 continue
-            filas.append(FilaKardex(tabla=idx, fila=i, servicio=titulo or f"Tabla {idx+1}",
-                                    datos=r[0], dx=r[1], evolucion=r[2], tratamiento=r[3]))
+            filas.append(FilaKardex(tabla=idx, fila=i, servicio=servicio, datos=r[0],
+                                    dx=celda(r, "DX"), evolucion=celda(r, "EVOLUCIÓN"),
+                                    tratamiento=celda(r, "TRATAMIENTO"),
+                                    col_dx=cols["DX"], col_evolucion=cols["EVOLUCIÓN"],
+                                    col_tratamiento=cols["TRATAMIENTO"]))
     return filas
+
+
+def describir_tablas(html):
+    """(cantidad de tablas, texto de la primera celda de la primera tabla, máx. 60 caracteres)."""
+    p = _Parser()
+    p.feed(html)
+    primera = ""
+    if p.tablas and p.tablas[0][1] and p.tablas[0][1][0]:
+        primera = " ".join(p.tablas[0][1][0][0].split())[:60]
+    return len(p.tablas), primera
 
 
 def id_documento(url_o_id):
@@ -104,13 +158,26 @@ def id_documento(url_o_id):
     return m.group(1) if m else (url_o_id or "").strip()
 
 
+def _pestana(url):
+    """«t.0» de una URL con `tab=t.0`, o ''."""
+    m = re.search(r"[?&#]tab=(t\.[A-Za-z0-9_]+)", url or "")
+    return m.group(1) if m else ""
+
+
 def descargar_html(contexto, url):
-    """Descarga el HTML exportado usando las cookies del navegador ya iniciado."""
+    """Descarga el HTML exportado usando las cookies del navegador ya iniciado.
+    Si la URL trae `tab=t.xxx` (documento con pestañas) se pide esa pestaña añadiendo
+    `&tab=t.xxx` a la URL de exportación. NO está verificado contra Google: si la exportación
+    con tab falla con error HTTP, se reintenta sin tab (que exporta la primera pestaña)."""
     if url.startswith(("http://127.0.0.1", "http://localhost")):
         r = contexto.request.get(url)          # simulador de pruebas: se descarga tal cual
     else:
         doc = id_documento(url)
-        r = contexto.request.get(f"https://docs.google.com/document/d/{doc}/export?format=html")
+        base = f"https://docs.google.com/document/d/{doc}/export?format=html"
+        tab = _pestana(url)
+        r = contexto.request.get(f"{base}&tab={tab}" if tab else base)
+        if tab and not r.ok and "accounts.google.com" not in r.url:
+            r = contexto.request.get(base)
     if "accounts.google.com" in r.url:
         raise ErrorApp("sesion", "Google pide iniciar sesión. Entra a la cuenta que tiene acceso al KARDEX.")
     if not r.ok:
@@ -120,7 +187,6 @@ def descargar_html(contexto, url):
 
 # ---------------------------------------------------------------- escritura (opcional)
 SCOPES = ["https://www.googleapis.com/auth/documents"]
-_COL = {"DX": 1, "EVOLUCIÓN": 2, "TRATAMIENTO": 3}
 
 
 def servicio_docs(carpeta, preferido="chrome"):
@@ -154,9 +220,25 @@ def _texto_celda(celda):
     return "".join(out).rstrip("\n")
 
 
+def _utf16(texto):
+    """Longitud en unidades UTF-16 (los índices de la API de Docs se miden así)."""
+    return len(texto.encode("utf-16-le")) // 2
+
+
+def _columnas_api(filas):
+    """Columnas por nombre leyendo el encabezado de ESA tabla (fila que empieza por DATOS entre las 3 primeras)."""
+    for fila in filas[:3]:
+        textos = [_texto_celda(c) for c in fila.get("tableCells", [])]
+        if textos and " ".join(textos[0].split()).upper().startswith("DATOS"):
+            return columnas_por_encabezado(textos)
+    return None
+
+
 def aplicar(servicio, url, acciones):
     """Escribe las acciones ACTUALIZAR. Relee el doc y verifica que la fila siga siendo
-    el mismo paciente antes de escribir. No toca el formato: el texto hereda el estilo de la celda.
+    el mismo paciente antes de escribir. La columna se elige por el ENCABEZADO de la tabla.
+    No toca el formato: el texto hereda el estilo de la celda; solo la primera línea de EVOLUCIÓN
+    (fecha - DR. médico) se pone en negrita.
     Devuelve (escritas: list[Accion], omitidas: list[(Accion, motivo)])."""
     doc_id = id_documento(url)
     doc = servicio.documents().get(documentId=doc_id).execute()
@@ -166,13 +248,18 @@ def aplicar(servicio, url, acciones):
     for a in acciones:
         f = a.fila
         try:
-            fila = tablas[f.tabla]["tableRows"][f.fila]
-            celdas = fila["tableCells"]
-            nombre_actual = _texto_celda(celdas[0]).split("\n")[0].strip()
-            if nombre_actual.upper() != f.nombre.upper():
+            filas = tablas[f.tabla]["tableRows"]
+            celdas = filas[f.fila]["tableCells"]
+            nombre_actual = interpretar_datos(_texto_celda(celdas[0]))["nombre"]
+            if normalizar(nombre_actual) != normalizar(f.nombre):
                 omitidas.append((a, f"La fila cambió (ahora dice «{nombre_actual}»)"))
                 continue
-            c = celdas[_COL[a.campo]]
+            cols = _columnas_api(filas)
+            col = (cols or {"DX": 1, "EVOLUCIÓN": 2, "TRATAMIENTO": 3}).get(a.campo)
+            if col is None:
+                omitidas.append((a, f"La tabla no tiene la columna {a.campo}"))
+                continue
+            c = celdas[col]
         except (IndexError, KeyError):
             omitidas.append((a, "No se encontró la celda"))
             continue
@@ -183,6 +270,14 @@ def aplicar(servicio, url, acciones):
         if fin > ini:
             sub.append({"deleteContentRange": {"range": {"startIndex": ini, "endIndex": fin}}})
         sub.append({"insertText": {"location": {"index": ini}, "text": a.nuevo}})
+        if a.campo == "EVOLUCIÓN" and a.nuevo.strip():
+            primera = a.nuevo.split("\n")[0]
+            fin_primera, fin_todo = ini + _utf16(primera), ini + _utf16(a.nuevo)
+            sub.append({"updateTextStyle": {"range": {"startIndex": ini, "endIndex": fin_primera},
+                                            "textStyle": {"bold": True}, "fields": "bold"}})
+            if fin_todo > fin_primera:   # el texto de la nota va sin negrita, como en el kardex
+                sub.append({"updateTextStyle": {"range": {"startIndex": fin_primera, "endIndex": fin_todo},
+                                                "textStyle": {"bold": False}, "fields": "bold"}})
         reqs.append((ini, sub))
         escritas.append(a)
     # de abajo hacia arriba para que los índices no se desplacen

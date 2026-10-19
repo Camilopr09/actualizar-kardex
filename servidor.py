@@ -111,7 +111,7 @@ class Servidor:
         por_nombre = {p.nombre: p for p in self.sistema}
         par_k, par_s = {}, {}          # id de kardex <-> id de sistema (mismo paciente)
         for f in self.kardex:
-            nom = emparejar(f.nombre, por_nombre.keys())
+            nom = emparejar(f.nombre, por_nombre.keys(), f.documento)
             if nom and id(por_nombre[nom]) not in par_s:
                 par_k[id(f)], par_s[id(por_nombre[nom])] = id_s[id(por_nombre[nom])], id_k[id(f)]
         return {

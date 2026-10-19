@@ -220,7 +220,7 @@ class Sistema:
                     ordenes = interpretar_ordenes(od["texto"])
             except Exception:  # noqa: BLE001
                 self.log(f"  {p.nombre}: no pude leer las órdenes médicas")
-            p.tratamiento = construir_tratamiento(info["plan"], ordenes, p.tratamiento)
+            p.tratamiento = construir_tratamiento(info["plan"], ordenes, p.tratamiento, ev["usuario"], fecha)
             p.encontrado_detalle = True
         except ErrorApp as e:
             if e.codigo == "sesion":      # sin sesión no se puede seguir con nadie
