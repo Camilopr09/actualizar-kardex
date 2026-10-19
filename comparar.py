@@ -117,12 +117,14 @@ def comparar(sistema, kardex):
                                    marcada=False, servicio=fila.servicio, habitacion=fila.habitacion, sis=p))
         if not p.encontrado_detalle:
             continue
-        for campo, nuevo, actual in (("DX", p.dx, fila.dx),
-                                     ("EVOLUCIÓN", p.evolucion, fila.evolucion),
-                                     ("TRATAMIENTO", p.tratamiento, fila.tratamiento)):
+        nota = ", ".join(x for x in (p.fecha.split(" ")[0], p.medico) if x) or "la nota más reciente"
+        for campo, nuevo, actual, detalle in (
+                ("DX", p.dx, fila.dx, f"Reemplazar por lo que dice {nota}"),
+                ("EVOLUCIÓN", p.evolucion, fila.evolucion, f"Nota más reciente: {nota}"),
+                ("TRATAMIENTO", p.tratamiento, fila.tratamiento, f"Plan de {nota} y órdenes del día")):
             if nuevo and not _igual(nuevo, actual):
                 acciones.append(Accion("ACTUALIZAR", fila.nombre, campo, actual, nuevo, fila,
-                                       f"{fila.servicio}", servicio=fila.servicio, habitacion=fila.habitacion, sis=p))
+                                       detalle, servicio=fila.servicio, habitacion=fila.habitacion, sis=p))
     for nom, p in por_nombre.items():
         if nom not in usados:
             acciones.append(Accion("AGREGAR", p.nombre, "", "", _resumen(p.nombre, p.habitacion, p.dx, p.fecha, p.medico),
