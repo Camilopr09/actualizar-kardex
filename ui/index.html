@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Actualizar Kardex</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{color-scheme:light;
+--bg:#F3F6F7;--surface:#FFFFFF;--surface2:#E9EEF0;--ink:#13222B;--mut:#46565F;--line:#D3DCE0;--line2:#8FA1AB;--pri:#0B6676;--priInk:#FFFFFF;--priHover:#084F5C;--priSoft:#DDF0F3;--focus:#0B57D0;
+--updFg:#14663C;--updBg:#E2F3E9;--updBd:#6FB48B;--addFg:#17479B;--addBg:#E3ECFB;--addBd:#8DAEE6;--retFg:#A3231C;--retBg:#FBE5E3;--retBd:#E08B84;--revFg:#744A00;--revBg:#FBEFCF;--revBd:#D1A64A;--delBg:#F9CFCA;--addDiff:#BFE6CD}
+:root[data-theme="dark"]{color-scheme:dark;
+--bg:#0F171C;--surface:#17222A;--surface2:#1F2E37;--ink:#E9F0F3;--mut:#AABBC5;--line:#2B3C46;--line2:#587083;--pri:#4FBFD3;--priInk:#04222A;--priHover:#74D2E2;--priSoft:#16363D;--focus:#8AB4FF;
+--updFg:#86DBA8;--updBg:#15301F;--updBd:#2F6B47;--addFg:#A5C6FF;--addBg:#14264A;--addBd:#35599E;--retFg:#FFABA3;--retBg:#3B1815;--retBd:#7E3B35;--revFg:#F4CB73;--revBg:#352809;--revBd:#7D611B;--delBg:#5E2723;--addDiff:#1D5A37}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:16px;overflow:auto}
+[hidden]{display:none!important}
+button,input,select{font-family:inherit;font-size:inherit;color:inherit}
+button{cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+h1,h2,p{margin:0}
+#app{height:100vh;min-width:1000px;min-height:640px;display:flex;flex-direction:column;background:var(--bg)}
+.btn{height:44px;padding:0 16px;border-radius:8px;border:1.5px solid var(--line2);background:var(--surface);color:var(--ink);font-weight:700;font-size:15px;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.btn:hover{background:var(--surface2)}
+.btn.pri{background:var(--pri);border-color:var(--pri);color:var(--priInk)}
+.btn.pri:hover{background:var(--priHover);border-color:var(--priHover)}
+.btn[aria-disabled="true"]{opacity:.6;border-style:dashed}
+.btn.big{height:52px;font-size:17px;padding:0 24px}
+.tbtn{height:30px;padding:0 10px;border-radius:6px;border:1px solid var(--line2);background:var(--surface);font-size:14px;font-weight:700;display:inline-flex;align-items:center;gap:6px}
+.tbtn:hover{background:var(--priSoft)}
+.tab{height:42px;padding:0 16px;border:1.5px solid var(--line2);border-bottom:0;border-radius:8px 8px 0 0;background:var(--surface2);font-weight:700;font-size:15px;display:inline-flex;align-items:center;gap:8px}
+.tab[aria-selected="true"]{background:var(--surface);border-color:var(--pri);box-shadow:inset 0 3px 0 var(--pri)}
+.tab:hover{background:var(--priSoft)}
+.cnt{min-width:26px;height:22px;padding:0 7px;border-radius:11px;background:var(--ink);color:var(--surface);font-size:13px;display:inline-flex;align-items:center;justify-content:center}
+.hbtn{background:none;border:0;padding:0;font-weight:700;font-size:14px;color:var(--ink);text-align:left;display:inline-flex;align-items:center;gap:6px;height:38px;width:100%}
+.hbtn:hover{text-decoration:underline}
+.row{border-bottom:1px solid var(--line);display:flex;align-items:stretch;min-height:52px}
+.row:hover{background:var(--surface2)}
+.row[data-sel="1"]{background:var(--priSoft);box-shadow:inset 4px 0 0 var(--pri)}
+.rbtn{flex:1;min-width:0;background:none;border:0;padding:6px 12px;text-align:left;display:grid;column-gap:12px;align-items:center;font-size:15px;line-height:1.3}
+.clamp2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.g-act{grid-template-columns:160px minmax(0,1.3fr) 130px minmax(0,2.4fr)}
+.g-sis{grid-template-columns:minmax(0,1.5fr) 110px minmax(0,1.1fr) 120px minmax(0,2fr)}
+.g-kar{grid-template-columns:140px minmax(0,1.5fr) 120px minmax(0,2.4fr)}
+.thead{position:sticky;top:0;z-index:2;background:var(--surface2);border-bottom:1.5px solid var(--line2)}
+.thead.gridrow{display:grid;column-gap:12px;padding:0 12px}
+.tag{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border-radius:6px;font-size:13px;font-weight:700;letter-spacing:.3px;border:1.5px solid;white-space:nowrap}
+.tag[data-t="ACTUALIZAR"]{color:var(--updFg);background:var(--updBg);border-color:var(--updBd)}
+.tag[data-t="AGREGAR"]{color:var(--addFg);background:var(--addBg);border-color:var(--addBd)}
+.tag[data-t="RETIRAR"]{color:var(--retFg);background:var(--retBg);border-color:var(--retBd);border-style:dashed}
+.tag[data-t="REVISAR"]{color:var(--revFg);background:var(--revBg);border-color:var(--revBd);border-style:double;border-width:3px}
+.tag[data-t="NONE"]{color:var(--mut);background:var(--surface2);border-color:var(--line2)}
+.card{background:var(--surface);border:1.5px solid var(--line2);border-radius:12px}
+.inp{height:44px;border-radius:8px;border:1.5px solid var(--line2);background:var(--surface);padding:0 12px;width:100%}
+.lbl{font-size:14px;font-weight:700;color:var(--mut)}
+.step[data-s="1"]{border-color:var(--updBd);background:var(--updBg)}
+.logl[data-d="0"]{color:var(--mut)}
+.scene{flex:1;min-height:0;display:flex;flex-direction:column}
+.sub{font-size:16px;color:var(--mut)}
+.cap{font-size:13px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.5px}
+.cmpbox{flex:1;min-height:0;overflow:auto;padding:2px 12px 8px;font-size:15.5px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.d-del{background:var(--delBg);text-decoration:line-through;text-decoration-thickness:2px}
+.d-add{background:var(--addDiff);font-weight:700;text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:3px}
+.ph{color:var(--mut);font-style:italic}
+.chk{width:20px;height:20px;accent-color:var(--pri)}
+.spin{animation:spin 1.1s linear infinite;transform-origin:50% 50%}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+.setcard{padding:16px 18px}
+.setcard h2{font-size:19px;margin-bottom:10px}
+.radio{flex:1;display:flex;align-items:center;gap:10px;height:48px;padding:0 14px;border:1.5px solid var(--line2);border-radius:8px;font-size:17px;font-weight:700}
+.radio.off{opacity:.6;border-style:dashed}
+.chip{display:inline-flex;align-items:center;gap:4px;height:38px;padding:0 4px 0 14px;border:1.5px solid var(--line2);border-radius:19px;background:var(--surface2);font-size:16px;font-weight:700}
+.chip button{width:30px;height:30px;border-radius:15px;border:0;background:none;font-size:16px}
+.chip button:hover{background:var(--priSoft)}
+::selection{background:var(--pri);color:var(--priInk)}
+#toast{position:fixed;left:50%;bottom:78px;transform:translateX(-50%);max-width:760px;padding:12px 20px;border-radius:10px;background:var(--ink);color:var(--surface);font-size:16px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.3);z-index:60}
+#dlgwrap{position:fixed;inset:0;background:rgba(6,12,16,.6);display:flex;align-items:center;justify-content:center;z-index:50}
+</style>
+</head>
+<body>
+<div id="app">
+
+<header id="top" style="height:40px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--surface2);border-bottom:1px solid var(--line)">
+<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--pri)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h4"/></svg>
+<span style="font-weight:700;font-size:15px">Actualizar Kardex</span>
+<span style="color:var(--mut);font-size:14px">· Clínica Reina Catalina</span>
+<span id="demoTag" class="tag" data-t="REVISAR" hidden style="height:24px;border-width:2px">MODO DEMO</span>
+<span style="flex:1"></span>
+<button class="tbtn" id="themeBtn" type="button"></button>
+<button class="tbtn" id="setBtn" type="button"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>Ajustes</button>
+</header>
+
+<div id="priv" style="height:34px;flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;background:var(--priSoft);border-bottom:1px solid var(--line)">
+<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>
+<span style="font-size:14px;flex:1"><b>Datos sensibles de pacientes.</b> Todo se procesa en este computador y no sale de él.</span>
+<span style="font-size:14px;font-weight:700;display:inline-flex;align-items:center;gap:6px"><span aria-hidden="true" id="sesGlyph"></span><span id="sesText"></span></span>
+</div>
+
+<main id="stage" style="flex:1;min-height:0;position:relative;display:flex;flex-direction:column">
+
+<!-- PRINCIPAL -->
+<section id="sc-main" class="scene" style="gap:8px;padding:10px 20px 8px">
+<div style="flex:none;display:flex;gap:10px;align-items:flex-end">
+<div style="flex:1;min-width:0">
+<input id="kurl" class="inp" type="text" placeholder="Pega aquí el enlace del kardex (Google Doc)" aria-label="Enlace del kardex (Google Doc)" autocomplete="off" spellcheck="false">
+</div>
+<button class="btn" id="bLogin" type="button"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/></svg>1. Iniciar sesión</button>
+<button class="btn pri" id="bAnalyze" type="button"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4l13 8-13 8z"/></svg>2. Analizar</button>
+<button class="btn pri" id="bWrite" type="button"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 11-11-3-3L5 16z"/></svg>3. Escribir en el kardex</button>
+<button class="btn" id="bCopy" type="button"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2"/></svg>Copiar texto nuevo</button>
+</div>
+
+<div style="flex:none;display:flex;align-items:center;gap:14px;height:26px">
+<span id="status" aria-live="polite" style="flex:1;min-width:0;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
+<span id="plabel" style="font-size:14px;color:var(--mut);font-weight:700"></span>
+<div id="pbar" role="progressbar" aria-label="Progreso" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="width:260px;height:12px;border-radius:6px;background:var(--surface2);border:1px solid var(--line2);overflow:hidden"><div id="pfill" style="height:100%;background:var(--pri);width:0"></div></div>
+</div>
+
+<div style="flex:none;display:flex;align-items:flex-end;gap:12px">
+<div id="tabs" role="tablist" aria-label="Resultados" style="display:flex;gap:4px"></div>
+<span style="flex:1"></span>
+<select id="typeF" aria-label="Filtrar por tipo de acción" style="height:40px;border-radius:8px;border:1.5px solid var(--line2);background:var(--surface);padding:0 10px;font-weight:700;margin-bottom:2px">
+<option value="ALL">Todos los tipos</option><option value="ACTUALIZAR">ACTUALIZAR</option><option value="AGREGAR">AGREGAR</option><option value="RETIRAR">RETIRAR</option><option value="REVISAR">REVISAR</option>
+</select>
+<div style="position:relative;width:250px;margin-bottom:2px">
+<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--mut)" stroke-width="2" stroke-linecap="round" style="position:absolute;left:10px;top:11px"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+<input id="q" type="search" aria-label="Filtrar por texto" placeholder="Filtrar por texto" autocomplete="off" style="height:40px;width:100%;border-radius:8px;border:1.5px solid var(--line2);background:var(--surface);padding:0 10px 0 36px">
+</div>
+</div>
+
+<div id="panel" role="tabpanel" style="flex:1;min-height:0;overflow:auto;background:var(--surface);border:1.5px solid var(--line2);border-radius:0 10px 10px 10px;margin-top:-9px"></div>
+
+<div style="flex:none;height:174px;display:flex;flex-direction:column;background:var(--surface);border:1.5px solid var(--line2);border-radius:10px;overflow:hidden">
+<div style="flex:none;height:34px;display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--surface2);border-bottom:1px solid var(--line)">
+<span id="cmpTag" class="tag" data-t="NONE" style="height:24px"></span>
+<span id="cmpWho" style="font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
+<span style="flex:1"></span>
+<span style="font-size:13px;color:var(--mut);white-space:nowrap"><span class="d-del" style="padding:0 4px;color:var(--ink)">tachado</span> se quita · <span class="d-add" style="padding:0 4px;color:var(--ink)">subrayado</span> se agrega</span>
+</div>
+<div style="flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+<section aria-label="Ahora en el kardex" style="min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--line)">
+<div class="cap" style="flex:none;padding:6px 12px 0">Ahora en el kardex</div>
+<div id="cmpOld" class="cmpbox"></div>
+</section>
+<section aria-label="Según el sistema (nuevo)" style="min-height:0;display:flex;flex-direction:column">
+<div class="cap" style="flex:none;padding:6px 12px 0">Según el sistema (nuevo)</div>
+<div id="cmpNew" class="cmpbox"></div>
+</section>
+</div>
+</div>
+
+<div style="flex:none;height:62px;display:flex;gap:14px;padding:6px 12px;background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden">
+<div class="cap" style="flex:none;width:130px;padding-top:2px">Registro de actividad</div>
+<div id="logMain" style="flex:1;min-width:0;font-size:13.5px;line-height:17px;font-variant-numeric:tabular-nums"></div>
+</div>
+</section>
+
+<section id="sc-login" class="scene" hidden style="overflow:auto"></section>
+<section id="sc-analyzing" class="scene" hidden></section>
+<section id="sc-result" class="scene" hidden style="overflow:auto"></section>
+<section id="sc-done" class="scene" hidden></section>
+<section id="sc-error" class="scene" hidden style="overflow:auto"></section>
+<section id="sc-settings" class="scene" hidden></section>
+
+</main>
+</div>
+
+<div id="toast" role="status" hidden></div>
+<div id="dlgwrap" hidden></div>
+
+<script>
+(function(){
+'use strict';
+
+/* ---------- utilidades ---------- */
+const GLYPH={ACTUALIZAR:'↻',AGREGAR:'+',RETIRAR:'−',REVISAR:'!',NONE:'='};
+const TIPOS=['ACTUALIZAR','AGREGAR','RETIRAR','REVISAR'];
+const $=id=>document.getElementById(id);
+
+function h(tag,o,...kids){
+  const e=document.createElement(tag);
+  if(o){for(const k in o){const v=o[k];if(v==null||v===false)continue;
+    if(k==='class')e.className=v;
+    else if(k==='text')e.textContent=v;
+    else if(k==='style')e.style.cssText=v;
+    else if(k.slice(0,2)==='on')e.addEventListener(k.slice(2),v);
+    else if(k==='checked'||k==='disabled'||k==='value'||k==='indeterminate')e[k]=v;
+    else e.setAttribute(k,v===true?'':v);}}
+  const add=x=>{if(x==null||x===false)return;if(Array.isArray(x))x.forEach(add);else e.appendChild(typeof x==='object'?x:document.createTextNode(String(x)));};
+  kids.forEach(add);
+  return e;
+}
+const ICONS={ // SVG estático (sin datos)
+  check:'<circle cx="12" cy="12" r="10"/><path d="M7 12.5l3.5 3.5L17 9"/>',
+  warn:'<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>',
+  lock:'<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/>',
+  spin:'<path d="M12 3a9 9 0 109 9"/>'
+};
+function ico(name,size,color,sw,cls){
+  const t=document.createElement('template');
+  t.innerHTML='<svg aria-hidden="true" width="'+size+'" height="'+size+'" viewBox="0 0 24 24" fill="none" stroke="'+color+'" stroke-width="'+(sw||2)+'" stroke-linecap="round" stroke-linejoin="round"'+(cls?' class="'+cls+'"':'')+'>'+ICONS[name]+'</svg>';
+  return t.content.firstChild;
+}
+function clear(e){while(e.firstChild)e.removeChild(e.firstChild);}
+function tag(t,label,style){return h('span',{class:'tag','data-t':t,style:style},h('span',{'aria-hidden':'true',text:GLYPH[t]||'!'}),label==null?t:label);}
+const pad=n=>String(n).padStart(2,'0');
+function plural(n,s,p){return n+' '+(n===1?s:p);}
+
+/* ---------- estado ---------- */
+const S={
+  E:null,scene:'main',tab:'act',sel:null,query:'',typeF:'ALL',
+  sort:{k:'',d:1},checked:{},resKey:null,lastN:null,lastAnalN:0,cancelling:false,
+  resSig:'',tblSig:null,offline:false,draft:null,dlg:null,dlgPrev:null,lastScene:null
+};
+let TOKEN=null;
+try{TOKEN=new URLSearchParams(location.search).get('t');if(TOKEN)sessionStorage.setItem('kardex-t',TOKEN);else TOKEN=sessionStorage.getItem('kardex-t');}catch(e){}
+
+async function call(path,body){
+  try{
+    const o={headers:{'X-Token':TOKEN||''}};
+    if(body!==undefined){o.method='POST';o.headers['Content-Type']='application/json';o.body=JSON.stringify(body);}
+    const r=await fetch(path,o);
+    let d=null;try{d=await r.json();}catch(e){d=null;}
+    return {status:r.status,ok:r.ok&&(!d||d.ok!==false),data:d||{}};
+  }catch(e){return {status:0,ok:false,data:{mensaje:'No se pudo conectar con la aplicación.'}};}
+}
+
+/* ---------- tema ---------- */
+function themeNow(){return document.documentElement.getAttribute('data-theme')==='dark'?'dark':'light';}
+function applyTheme(t){document.documentElement.setAttribute('data-theme',t);const b=$('themeBtn');clear(b);
+  b.appendChild(h('span',{'aria-hidden':'true'}));
+  b.firstChild.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 019.5 4 8 8 0 1020 14.5z"/></svg>';
+  b.appendChild(document.createTextNode(t==='dark'?'Modo claro':'Modo oscuro'));
+  if(S.scene==='settings')renderSettingsDyn();}
+function initTheme(){
+  let t=null;try{t=localStorage.getItem('kardex-tema');}catch(e){}
+  if(t!=='dark'&&t!=='light')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';
+  applyTheme(t);
+}
+function toggleTheme(){const t=themeNow()==='dark'?'light':'dark';applyTheme(t);try{localStorage.setItem('kardex-tema',t);}catch(e){}}
+
+/* ---------- aviso ---------- */
+let toastT=null;
+function say(msg){const t=$('toast');t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>{t.hidden=true;},4200);}
+
+/* ---------- escenas ---------- */
+const SCENES=['main','login','analyzing','result','done','error','settings'];
+let shown=null;
+function setScene(name){
+  S.scene=name;
+  const changed=shown!==name;
+  if(changed){
+    SCENES.forEach(n=>{$('sc-'+n).hidden=(n!==name);});
+    if(name==='settings')openSettings();
+    if(name!=='analyzing')S.anaBuilt=false;
+    shown=name;
+    if(S.dlg&&name!=='main')closeConfirm();
+  }
+  renderScene(changed);
+}
+let loginSig='';
+function renderScene(full){
+  renderChrome();
+  switch(S.scene){
+    case 'main':renderMain(full);break;
+    case 'login':{const E=S.E,sig=[E.tarea&&E.tarea.tipo,E.sesion_guardada,E.config.navegador].join('|');if(full||sig!==loginSig){loginSig=sig;renderLogin();}break;}
+    case 'analyzing':renderAnalyzing();break;
+    case 'result':if(full)renderResult();break;
+    case 'done':if(full)renderDone();break;
+    case 'error':if(full)renderError();break;
+    case 'settings':renderSettingsDyn();break;
+  }
+}
+function renderChrome(){
+  const E=S.E;if(!E)return;
+  const ok=E.sesion_guardada;
+  $('sesGlyph').textContent=ok?'✓':'✕';
+  $('sesText').textContent=ok?'Sesión guardada':'Sin sesión guardada';
+  $('demoTag').hidden=!E.demo;
+}
+
+/* ---------- sondeo ---------- */
+let pollT=null;
+function busy(){return !!(S.E&&S.E.tarea);}
+async function poll(){
+  clearTimeout(pollT);
+  const r=await call('/api/estado');
+  if(r.status===200){
+    if(S.offline){S.offline=false;}
+    try{onEstado(r.data);}catch(e){console.error(e);}
+  }else if(!S.offline){
+    S.offline=true;
+    say(r.status===0?'Se perdió la conexión con la aplicación. Reintentando…':'No se pudo leer el estado de la aplicación.');
+  }
+  pollT=setTimeout(poll,busy()?700:3000);
+}
+function onEstado(E){
+  const first=!S.E;
+  S.E=E;
+  if(first){
+    S.lastN=E.ultima?E.ultima.n:0;
+    if(E.ultima&&E.ultima.tipo==='analizar')S.lastAnalN=E.ultima.n;
+    syncResultado();
+    if(E.tarea&&E.tarea.tipo==='analizar')S.scene='analyzing';
+    else if(E.tarea&&E.tarea.tipo==='sesion')S.scene='login';
+    setScene(S.scene);
+    return;
+  }
+  if(E.ultima&&E.ultima.n!==S.lastN){
+    S.lastN=E.ultima.n;
+    syncResultado(E.ultima.tipo==='analizar'&&E.ultima.fin==='ok'?E.ultima.n:null);
+    finTarea(E.ultima);
+  }else{
+    syncResultado();
+    if(E.tarea&&E.tarea.tipo==='analizar'&&!S.cancelling&&S.scene!=='analyzing'&&S.scene!=='settings')S.scene='analyzing';
+  }
+  if(!E.tarea)S.cancelling=false;
+  setScene(S.scene);
+}
+function finTarea(u){
+  const E=S.E;
+  if(u.fin==='error'&&E.error&&E.error.codigo!=='cancelado'){S.scene='error';return;}
+  if(u.tipo==='analizar'){
+    if(u.fin==='ok')S.scene='result';
+    else if(S.scene==='analyzing')S.scene='main';
+  }else if(u.tipo==='escribir'){
+    if(u.fin==='ok')S.scene='done';
+  }else if(u.tipo==='sesion'){
+    if(u.fin==='ok')say('Sesión guardada.');
+  }
+}
+function syncResultado(newAnalN){
+  const E=S.E,R=E.resultado;
+  if(newAnalN!=null)S.lastAnalN=newAnalN;
+  const key=R?R.fecha+'|'+S.lastAnalN:null;
+  if(key!==S.resKey){
+    S.resKey=key;S.checked={};S.query='';S.typeF='ALL';S.tab='act';S.sort={k:'',d:1};S.sel=null;
+    $('q').value='';$('typeF').value='ALL';
+  }
+  if(R){
+    R.acciones.forEach(a=>{if(!(a.id in S.checked))S.checked[a.id]=!!(a.automatica&&a.marcada);});
+    ensureSel();
+  }
+  const sig=R?JSON.stringify(R):'';
+  S.resSig=sig;
+}
+function ensureSel(){
+  const R=S.E.resultado;if(!R)return;
+  const list=tabList(S.tab);
+  if(!S.sel||!list.some(x=>x.id===S.sel)){S.sel=list.length?list[0].id:null;}
+}
+function tabList(t){const R=S.E&&S.E.resultado;if(!R)return [];return t==='act'?R.acciones:t==='sis'?R.sistema:R.kardex;}
+
+/* ---------- Principal ---------- */
+function sortKeyVal(r,k){
+  let v=r[k];if(v==null)v='';
+  if(k==='fecha'){const m=String(v).match(/^(\d+)\/(\d+)\/(\d+)/);if(m)return m[3]+m[2].padStart(2,'0')+m[1].padStart(2,'0');}
+  return String(v);
+}
+function sortedRows(rows){
+  if(!S.sort.k)return rows;
+  const k=S.sort.k,d=S.sort.d;
+  return rows.slice().sort((x,y)=>d*sortKeyVal(x,k).localeCompare(sortKeyVal(y,k),'es',{numeric:true}));
+}
+function filtered(){
+  const R=S.E.resultado;if(!R)return [];
+  const q=S.query.trim().toLowerCase();
+  const m=t=>!q||t.toLowerCase().includes(q);
+  if(S.tab==='act')return sortedRows(R.acciones.filter(a=>(S.typeF==='ALL'||a.tipo===S.typeF)&&m([a.paciente,a.campo,a.detalle,a.tipo].join(' '))));
+  if(S.tab==='sis')return sortedRows(R.sistema.filter(r=>m([r.nombre,r.habitacion,r.medico,r.dx].join(' '))));
+  return sortedRows(R.kardex.filter(r=>m([r.nombre,r.servicio,r.habitacion,r.dx].join(' '))));
+}
+function renderMain(full){
+  const E=S.E;if(!E)return;
+  const R=E.resultado;
+  const k=$('kurl');
+  if(document.activeElement!==k&&k.value!==(E.config.url_kardex||''))k.value=E.config.url_kardex||'';
+  // botón escribir
+  const nChecked=checkedIds().length;
+  $('bWrite').setAttribute('aria-disabled',(!R||!E.credenciales)?'true':'false');
+  renderStatus();
+  renderTabs();
+  $('typeF').hidden=S.tab!=='act';
+  if(full||S.tblSig!==S.resSig+'|'+S.tab){renderTable();}
+  renderCmp();
+  renderLog();
+}
+function renderStatus(){
+  const E=S.E,R=E.resultado;
+  let txt,pct=0,pl='Sin análisis';
+  const t=E.tarea;
+  if(t&&t.tipo==='escribir'){
+    txt='Escribiendo en el kardex… no cierres esta ventana.';pl='Escribiendo';
+    const p=E.progreso;if(p&&p.total>0){pct=Math.round(p.actual/p.total*100);pl=p.actual+'/'+p.total;}
+  }else if(t&&t.tipo==='sesion'){
+    txt='Hay un navegador abierto para guardar tu sesión. Ciérralo cuando termines.';pl='Sesión en curso';
+  }else if(!R){
+    txt=E.sesion_guardada?'Listo. Pega el enlace del kardex y pulsa «2. Analizar».':'Primero inicia sesión: pulsa «1. Iniciar sesión».';
+  }else if(E.escritura&&E.escritura.escritas.length){
+    txt='Escritura terminada: '+plural(E.escritura.escritas.length,'celda escrita','celdas escritas')+'. Quedan '+plural(R.acciones.length,'fila','filas')+' por revisar.';
+    pct=100;pl='Escrito';
+  }else{
+    txt='Análisis terminado. Marca lo que apruebas y pulsa «3. Escribir en el kardex».';
+    pct=100;const n=(E.progreso&&E.progreso.total)||R.kardex.length;pl=n+'/'+n+' pacientes';
+  }
+  $('status').textContent=txt;$('plabel').textContent=pl;
+  $('pfill').style.width=pct+'%';$('pbar').setAttribute('aria-valuenow',pct);
+}
+function renderTabs(){
+  const R=S.E.resultado;
+  const def=[['act','Qué hay que actualizar',R?R.acciones.length:0],['sis','Encontré en el sistema',R?R.sistema.length:0],['kar','Encontré en el kardex',R?R.kardex.length:0]];
+  const box=$('tabs'),focused=document.activeElement&&box.contains(document.activeElement)?document.activeElement.getAttribute('data-tab'):null;
+  clear(box);
+  def.forEach(([id,label,n])=>{
+    box.appendChild(h('button',{class:'tab',type:'button',role:'tab','data-tab':id,'aria-selected':S.tab===id?'true':'false',onclick:()=>{
+      if(S.tab===id)return;S.tab=id;S.sort={k:'',d:1};S.sel=null;ensureSel();renderMain(true);
+    }},label,h('span',{class:'cnt',text:String(n)})));
+  });
+  if(focused){const b=box.querySelector('[data-tab="'+focused+'"]');if(b)b.focus();}
+}
+function sortHead(cols,focusKey){
+  return cols.map(([k,label])=>{
+    const on=S.sort.k===k;
+    return h('div',{role:'columnheader','aria-sort':on?(S.sort.d===1?'ascending':'descending'):'none'},
+      h('button',{class:'hbtn',type:'button','data-key':k,onclick:()=>{
+        S.sort={k:k,d:on?-S.sort.d:1};renderTable(k);
+      }},label,h('span',{'aria-hidden':'true',text:on?(S.sort.d===1?' ▲':' ▼'):''})));
+  });
+}
+function renderTable(focusKey){
+  const R=S.E.resultado,panel=$('panel');
+  S.tblSig=S.resSig+'|'+S.tab;
+  const scroll=panel.scrollTop;
+  clear(panel);
+  if(!R){
+    panel.appendChild(h('div',{style:'height:100%;min-height:200px;display:flex;align-items:center;justify-content:center;gap:28px;padding:16px'},
+      emptyIcon(),
+      h('div',{style:'max-width:560px'},
+        h('div',{style:'font-size:22px;font-weight:700;margin-bottom:6px',text:'Todavía no hay resultados'}),
+        h('div',{style:'font-size:16px;line-height:1.45;color:var(--mut);margin-bottom:12px',text:'Aquí verás qué cambió entre el sistema y el kardex. Primero inicia sesión (solo la primera vez) y luego analiza.'}),
+        h('div',{style:'display:flex;gap:10px'},
+          h('button',{class:'btn',type:'button',onclick:goLogin},'1. Iniciar sesión'),
+          h('button',{class:'btn pri',type:'button',onclick:doAnalyze},'2. Analizar')))));
+    return;
+  }
+  const rows=filtered();
+  let tbl;
+  if(S.tab==='act'){
+    const autoRows=R.acciones.filter(a=>a.automatica);
+    const allCb=h('input',{type:'checkbox',class:'chk',id:'allCb','aria-label':'Marcar o desmarcar todas las actualizaciones automáticas',onchange:ev=>toggleAll(ev.target.checked)});
+    tbl=h('div',{role:'table','aria-label':'Qué hay que actualizar',style:'min-width:860px'},
+      h('div',{role:'row',class:'thead',style:'display:flex'},
+        h('div',{role:'columnheader',style:'width:56px;flex:none;display:flex;align-items:center;justify-content:center'},allCb),
+        h('div',{class:'g-act',style:'flex:1;min-width:0;display:grid;column-gap:12px;padding:0 12px'},sortHead([['tipo','Acción'],['paciente','Paciente'],['campo','Campo'],['detalle','Detalle']]))),
+      rows.map(a=>{
+        const auto=!!a.automatica;
+        return h('div',{role:'row',class:'row','data-id':a.id,'data-sel':S.sel===a.id?'1':'0'},
+          h('div',{role:'cell',style:'width:56px;flex:none;display:flex;align-items:center;justify-content:center'},
+            h('input',{type:'checkbox',class:'chk','data-cb':a.id,checked:auto&&!!S.checked[a.id],disabled:!auto,
+              'aria-label':(auto?'Escribir ':'Se hace a mano: ')+(a.campo||'fila')+' de '+a.paciente,
+              title:auto?'Escribir esta celda en el kardex':'Esta acción se hace a mano',
+              onchange:ev=>{S.checked[a.id]=ev.target.checked;updateAllCb();}})),
+          h('button',{class:'rbtn g-act',type:'button',onclick:()=>pick(a.id)},
+            h('span',{},tag(a.tipo)),
+            h('span',{class:'clamp2',style:'font-weight:700',text:a.paciente}),
+            h('span',{text:a.campo||'—'}),
+            h('span',{class:'clamp2',text:a.detalle||''})));
+      }));
+    panel.appendChild(tbl);
+    updateAllCb();
+  }else if(S.tab==='sis'){
+    tbl=h('div',{role:'table','aria-label':'Encontré en el sistema',style:'min-width:860px'},
+      h('div',{role:'row',class:'thead gridrow g-sis'},sortHead([['nombre','Paciente'],['habitacion','Habitación'],['medico','Médico'],['fecha','Fecha'],['dx','Diagnóstico']])),
+      rows.map(r=>h('div',{role:'row',class:'row','data-id':r.id,'data-sel':S.sel===r.id?'1':'0'},
+        h('button',{class:'rbtn g-sis',type:'button',onclick:()=>pick(r.id)},
+          h('span',{class:'clamp2',style:'font-weight:700',text:r.nombre}),h('span',{text:r.habitacion||''}),h('span',{class:'clamp2',text:r.medico||''}),h('span',{text:r.fecha||''}),h('span',{class:'clamp2',text:r.dx||''})))));
+    panel.appendChild(tbl);
+  }else{
+    tbl=h('div',{role:'table','aria-label':'Encontré en el kardex',style:'min-width:860px'},
+      h('div',{role:'row',class:'thead gridrow g-kar'},sortHead([['servicio','Servicio'],['nombre','Paciente'],['habitacion','Habitación'],['dx','DX actual']])),
+      rows.map(r=>h('div',{role:'row',class:'row','data-id':r.id,'data-sel':S.sel===r.id?'1':'0'},
+        h('button',{class:'rbtn g-kar',type:'button',onclick:()=>pick(r.id)},
+          h('span',{style:'font-weight:700',text:r.servicio||''}),h('span',{class:'clamp2',style:'font-weight:700',text:r.nombre}),h('span',{text:r.habitacion||''}),h('span',{class:'clamp2',text:r.dx||''})))));
+    panel.appendChild(tbl);
+  }
+  if(!rows.length){
+    const anyFilter=S.query.trim()||(S.tab==='act'&&S.typeF!=='ALL');
+    tbl.appendChild(h('div',{style:'padding:24px;text-align:center;color:var(--mut);font-size:16px',text:anyFilter||tabList(S.tab).length?'Ningún resultado con ese filtro.':'No hay nada en esta lista.'}));
+  }
+  panel.scrollTop=scroll;
+  if(focusKey){const b=panel.querySelector('.hbtn[data-key="'+focusKey+'"]');if(b)b.focus();}
+}
+function emptyIcon(){const t=document.createElement('template');t.innerHTML='<svg aria-hidden="true" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--mut)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h4"/></svg>';return t.content.firstChild;}
+function autoIds(){const R=S.E.resultado;return R?R.acciones.filter(a=>a.automatica).map(a=>a.id):[];}
+function checkedIds(){const R=S.E&&S.E.resultado;return R?R.acciones.filter(a=>a.automatica&&a.tipo==='ACTUALIZAR'&&S.checked[a.id]).map(a=>a.id):[];}
+function updateAllCb(){
+  const cb=$('allCb');if(!cb)return;
+  const ids=autoIds(),n=ids.filter(i=>S.checked[i]).length;
+  cb.checked=ids.length>0&&n===ids.length;cb.indeterminate=n>0&&n<ids.length;cb.disabled=ids.length===0;
+}
+function toggleAll(v){
+  autoIds().forEach(id=>{S.checked[id]=v;});
+  document.querySelectorAll('#panel input[data-cb]').forEach(cb=>{if(!cb.disabled)cb.checked=v;});
+  updateAllCb();
+}
+function pick(id){
+  S.sel=id;
+  document.querySelectorAll('#panel .row').forEach(r=>{r.setAttribute('data-sel',r.getAttribute('data-id')===id?'1':'0');});
+  renderCmp();
+}
+function renderLog(){
+  const box=$('logMain'),lines=(S.E.registro||[]).slice(-3);
+  clear(box);
+  lines.forEach(l=>box.appendChild(h('div',{class:'logl','data-d':'1',style:'white-space:nowrap;overflow:hidden;text-overflow:ellipsis',text:l})));
+}
+
+/* ---------- Comparación y diff ---------- */
+function diff(a,b){
+  const tk=t=>t.match(/\n|[^\S\n]+|[^\s]+/g)||[];
+  const A=tk(a),B=tk(b),n=A.length,m=B.length;
+  if(n*m>250000)return [[{t:a,c:0}],[{t:b,c:0}]];
+  const L=[];for(let i=0;i<=n;i++)L.push(new Array(m+1).fill(0));
+  for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--)L[i][j]=A[i]===B[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);
+  const oa=[],ob=[];let i=0,j=0;
+  while(i<n&&j<m){
+    if(A[i]===B[j]){oa.push([A[i],0]);ob.push([B[j],0]);i++;j++;}
+    else if(L[i+1][j]>=L[i][j+1]){oa.push([A[i],1]);i++;}
+    else{ob.push([B[j],1]);j++;}
+  }
+  while(i<n){oa.push([A[i],1]);i++;}
+  while(j<m){ob.push([B[j],1]);j++;}
+  const merge=arr=>{const out=[];arr.forEach(([t,c])=>{const l=out[out.length-1];if(l&&l.c===c)l.t+=t;else out.push({t:t,c:c});});return out;};
+  return [merge(oa),merge(ob)];
+}
+function fillSegs(box,segs,cls){
+  clear(box);
+  segs.forEach(s=>{box.appendChild(s.c?h('span',{class:cls,text:s.t}):document.createTextNode(s.t));});
+}
+function cmpData(){
+  const R=S.E.resultado;
+  if(!R)return {t:'NONE',label:'SIN FILA',who:'Aún no hay una fila seleccionada',o:'Aquí verás el texto que hay hoy en el kardex.',n:'Aquí verás el texto nuevo según el sistema.',ph:true};
+  let act=null,row=null;
+  if(S.tab==='act')act=R.acciones.find(a=>a.id===S.sel);
+  else{
+    row=(S.tab==='sis'?R.sistema:R.kardex).find(r=>r.id===S.sel);
+    if(row)act=R.acciones.find(a=>a.paciente===row.nombre);
+  }
+  if(act){
+    const who=[act.paciente,act.servicio,act.habitacion,act.campo].filter(Boolean).join(' · ');
+    let o=act.actual||'',n=act.nuevo||'',po=false,pn=false;
+    if(act.tipo==='AGREGAR'&&!o){o='— No está en el kardex —';po=true;}
+    if(act.tipo==='RETIRAR'&&!n){n='— No aparece en el sistema —';pn=true;}
+    return {t:act.tipo,label:act.tipo,who:who,o:o,n:n,po:po,pn:pn};
+  }
+  if(row){
+    const k=R.kardex.find(r=>r.nombre===row.nombre),s=R.sistema.find(r=>r.nombre===row.nombre);
+    return {t:'NONE',label:'SIN CAMBIOS',who:row.nombre+' · DX',
+      o:k?(k.dx||''):'— No está en el kardex —',po:!k,n:s?(s.dx||''):'— No aparece en el sistema —',pn:!s};
+  }
+  return {t:'NONE',label:'SIN FILA',who:'Selecciona una fila',o:'',n:''};
+}
+function renderCmp(){
+  const c=cmpData(),t=$('cmpTag');
+  t.setAttribute('data-t',c.t);clear(t);
+  t.appendChild(h('span',{'aria-hidden':'true',text:GLYPH[c.t]}));t.appendChild(document.createTextNode(c.label));
+  $('cmpWho').textContent=c.who;
+  const ob=$('cmpOld'),nb=$('cmpNew');
+  if(c.ph||c.po||c.pn){
+    const put=(box,txt,isPh)=>{clear(box);box.appendChild(isPh?h('span',{class:'ph',text:txt}):document.createTextNode(txt));};
+    put(ob,c.o,c.ph||c.po);put(nb,c.n,c.ph||c.pn);
+    return;
+  }
+  const [a,b]=diff(c.o,c.n);
+  fillSegs(ob,a,'d-del');fillSegs(nb,b,'d-add');
+}
+
+/* ---------- acciones de la barra ---------- */
+async function saveKardexUrl(){
+  const v=$('kurl').value.trim();
+  if(!S.E||v===(S.E.config.url_kardex||''))return true;
+  const r=await call('/api/config',{url_kardex:v});
+  if(r.ok&&r.data.config)S.E.config=r.data.config;
+  else{say(r.data.mensaje||'No se pudo guardar el enlace.');return false;}
+  return true;
+}
+function goLogin(){setScene('login');}
+async function doAnalyze(){
+  if(!S.E)return;
+  if(!S.E.sesion_guardada){say('Primero inicia sesión (paso 1).');setScene('login');return;}
+  await saveKardexUrl();
+  const r=await call('/api/analizar',{});
+  if(!r.ok){say(r.data.mensaje||'No se pudo iniciar el análisis.');return;}
+  S.cancelling=false;
+  setScene('analyzing');poll();
+}
+function goWrite(){
+  const E=S.E,R=E.resultado;
+  if(!R){say('Primero pulsa «2. Analizar».');return;}
+  if(!E.credenciales){say('La escritura está desactivada. Conecta Google Docs en Ajustes (opcional) o usa «Copiar texto nuevo».');return;}
+  if(!checkedIds().length){say('Marca al menos una celda ACTUALIZAR para escribir.');return;}
+  openConfirm();
+}
+function copyNew(){
+  const R=S.E.resultado;
+  if(!R){say('Primero pulsa «2. Analizar».');return;}
+  const ids=checkedIds(),acts=R.acciones.filter(a=>ids.includes(a.id));
+  if(!acts.length){say('Marca al menos una celda ACTUALIZAR para copiar.');return;}
+  const txt=acts.map(a=>a.paciente+' · '+(a.campo||'—')+'\n'+(a.nuevo||'')).join('\n\n');
+  copyText(txt).then(ok=>say(ok?'Texto nuevo copiado: '+plural(acts.length,'celda','celdas')+'.':'No se pudo copiar. Selecciona el texto en el panel y cópialo a mano.'));
+}
+async function copyText(txt){
+  try{if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(txt);return true;}}catch(e){}
+  try{
+    const ta=h('textarea',{'aria-hidden':'true',tabindex:'-1',style:'position:fixed;left:-9999px;top:0;opacity:0'});
+    ta.value=txt;document.body.appendChild(ta);ta.focus();ta.select();
+    const ok=document.execCommand('copy');document.body.removeChild(ta);return ok;
+  }catch(e){return false;}
+}
+
+/* ---------- diálogo confirmar ---------- */
+function openConfirm(){
+  const R=S.E.resultado,ids=checkedIds();
+  const fc={};R.acciones.filter(a=>ids.includes(a.id)).forEach(a=>{const f=a.campo||'—';fc[f]=(fc[f]||0)+1;});
+  const w=$('dlgwrap');clear(w);
+  const cancel=h('button',{class:'btn big',type:'button',onclick:closeConfirm},'Cancelar');
+  const go=h('button',{class:'btn pri big',type:'button',onclick:doWrite},'Continuar');
+  w.appendChild(h('div',{role:'dialog','aria-modal':'true','aria-labelledby':'dlgt',class:'card',style:'width:560px;max-width:calc(100vw - 32px);padding:26px 28px;box-shadow:0 20px 50px rgba(0,0,0,.4)'},
+    h('h2',{id:'dlgt',style:'margin:0 0 10px;font-size:26px',text:'Confirmar escritura'}),
+    h('p',{style:'margin:0 0 6px;font-size:20px;line-height:1.4;font-weight:700',text:'Se escribirán '+plural(ids.length,'celda','celdas')+' en el KARDEX.'}),
+    h('p',{style:'margin:0 0 14px;font-size:17px;line-height:1.5'},'Puedes deshacer con ',h('b',{text:'Archivo → Historial de versiones'}),'.'),
+    h('div',{style:'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px'},Object.keys(fc).map(f=>tag('ACTUALIZAR',fc[f]+' · '+f,'height:30px;font-size:14px'))),
+    h('p',{style:'margin:0 0 20px;font-size:15px;color:var(--mut);line-height:1.45',text:'Solo se escribe lo que dejaste marcado. AGREGAR, RETIRAR y REVISAR se hacen a mano.'}),
+    h('div',{style:'display:flex;gap:12px;justify-content:flex-end'},cancel,go)));
+  S.dlgPrev=document.activeElement;
+  w.hidden=false;S.dlg={cancel:cancel,go:go};cancel.focus();
+}
+function closeConfirm(){
+  $('dlgwrap').hidden=true;clear($('dlgwrap'));S.dlg=null;
+  if(S.dlgPrev&&S.dlgPrev.focus)try{S.dlgPrev.focus();}catch(e){}
+}
+async function doWrite(){
+  const ids=checkedIds();
+  closeConfirm();
+  const r=await call('/api/escribir',{ids:ids});
+  if(r.ok){say('Escribiendo…');poll();return;}
+  if(r.data.codigo==='credenciales'){say(r.data.mensaje||'Faltan las credenciales de Google. Conéctalas en Ajustes.');setScene('settings');return;}
+  say(r.data.mensaje||'No se pudo escribir en el kardex.');
+}
+document.addEventListener('keydown',ev=>{
+  if(!S.dlg)return;
+  if(ev.key==='Escape'){ev.preventDefault();closeConfirm();}
+  else if(ev.key==='Tab'){
+    const a=S.dlg.cancel,b=S.dlg.go,f=document.activeElement;
+    if(ev.shiftKey&&f===a){ev.preventDefault();b.focus();}
+    else if(!ev.shiftKey&&f===b){ev.preventDefault();a.focus();}
+    else if(f!==a&&f!==b){ev.preventDefault();a.focus();}
+  }
+});
+
+/* ---------- Primer uso ---------- */
+function renderLogin(){
+  const E=S.E,box=$('sc-login');if(!E)return;
+  const run=E.tarea&&E.tarea.tipo==='sesion';
+  const saved=E.sesion_guardada;
+  const nav=E.config.navegador==='brave'?'Brave':'Chrome';
+  let st; // estados por paso: [done, status, primary, disabled]
+  if(run)st=[[true,'Hecho',false,true],[false,'En curso',false,true],[false,'Esperando…',false,true]];
+  else if(saved)st=[[true,'Hecho',false,false],[true,'Hecho',false,true],[true,'Hecho',false,true]];
+  else st=[[false,'Siguiente paso',true,false],[false,'Pendiente',false,true],[false,'Pendiente',false,true]];
+  const steps=[
+    ['Abre el navegador','Se abre '+nav+' con la Agenda de Hospital Office y el kardex en dos pestañas. Usa solo esa ventana.','Abrir '+nav+(saved&&!run?' de nuevo':'')],
+    ['Entra a Hospital Office y a Google','En cada pestaña escribe tu usuario y contraseña (Hospital Office) y elige la cuenta de Google que puede abrir el kardex. Espera a ver la Agenda y el documento.',null],
+    ['Cierra el navegador','Cierra la ventana del navegador. Al cerrarla, la sesión queda guardada para la próxima vez.',null]
+  ];
+  const sw=h('div',{class:'tag','data-t':saved?'ACTUALIZAR':'RETIRAR',style:'height:36px;font-size:15px;padding:0 14px'},h('span',{'aria-hidden':'true',text:saved?'✓':'✕'}),saved?'Sesión guardada':'Sin sesión guardada');
+  clear(box);
+  box.appendChild(h('div',{style:'padding:18px 40px;display:flex;flex-direction:column;gap:14px'},
+    h('div',{style:'display:flex;align-items:center;gap:14px'},
+      h('button',{class:'btn',type:'button',onclick:()=>setScene('main')},'← Volver'),
+      h('div',{style:'flex:1'},h('h1',{style:'font-size:28px',text:'Primer uso: guarda tu sesión'}),h('div',{class:'sub',style:'margin-top:2px',text:'Solo se hace la primera vez. Después la sesión queda guardada en este computador.'})),
+      sw),
+    steps.map((p,i)=>{
+      const s=st[i];
+      return h('div',{class:'card step','data-s':s[0]?'1':'0',style:'display:flex;align-items:center;gap:18px;padding:16px 20px'},
+        h('div',{'aria-hidden':'true',style:'flex:none;width:48px;height:48px;border-radius:24px;background:var(--ink);color:var(--surface);font-size:22px;font-weight:700;display:flex;align-items:center;justify-content:center',text:s[0]?'✓':String(i+1)}),
+        h('div',{style:'flex:1;min-width:0'},
+          h('div',{style:'font-size:20px;font-weight:700',text:'Paso '+(i+1)+'. '+p[0]}),
+          h('div',{style:'font-size:16px;line-height:1.45;color:var(--mut);margin-top:2px',text:p[1]})),
+        h('div',{style:'flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:6px'},
+          h('span',{style:'font-size:14px;font-weight:700',text:s[1]}),
+          p[2]?h('button',{class:'btn'+(s[2]?' pri':''),type:'button','aria-disabled':s[3]?'true':'false',onclick:()=>{if(!s[3])startSesion();}},p[2]):null));
+    }),
+    h('div',{style:'display:flex;align-items:center;gap:14px;margin-top:2px'},
+      ico('lock',22,'var(--ink)',2),
+      h('span',{style:'flex:1;font-size:15px;color:var(--mut)',text:'La app no guarda tus contraseñas: solo la sesión del navegador ('+nav+'), en este computador. Si vence, se te avisará.'}),
+      h('button',{class:'btn pri big',type:'button',onclick:()=>setScene('main')},'Ir al inicio'))));
+}
+async function startSesion(){
+  const r=await call('/api/sesion',{});
+  if(!r.ok){say(r.data.mensaje||'No se pudo abrir el navegador.');return;}
+  poll();
+}
+
+/* ---------- Analizando ---------- */
+function splitLog(l){const m=String(l).match(/^(\d\d:\d\d)\s+(.*)$/);return m?[m[1],m[2]]:['',String(l)];}
+function buildAnalyzing(){
+  const box=$('sc-analyzing');clear(box);
+  const R={};
+  R.name=h('div',{'aria-live':'polite',style:'font-size:26px;font-weight:700;margin-bottom:12px'});
+  R.fill=h('div',{style:'height:100%;background:var(--pri);width:0'});
+  R.bar=h('div',{role:'progressbar','aria-label':'Progreso del análisis','aria-valuemin':'0','aria-valuemax':'100','aria-valuenow':'0',style:'height:18px;border-radius:9px;background:var(--surface2);border:1px solid var(--line2);overflow:hidden'},R.fill);
+  R.rem=h('span');R.pct=h('span');
+  R.log=h('div',{style:'flex:1;min-height:0;overflow:hidden;padding:8px 16px;font-size:15px;line-height:26px;display:flex;flex-direction:column;justify-content:flex-end'});
+  box.appendChild(h('div',{style:'flex:1;min-height:0;padding:22px 40px;display:flex;flex-direction:column;gap:16px'},
+    h('div',{style:'display:flex;align-items:center;gap:16px'},
+      ico('spin',36,'var(--pri)',2.4,'spin'),
+      h('div',{style:'flex:1'},h('h1',{style:'font-size:28px',text:'Analizando el kardex'}),h('div',{class:'sub',text:'Comparando la historia clínica con cada fila del kardex.'})),
+      h('button',{class:'btn',type:'button',onclick:cancelAnalyze},'Cancelar')),
+    h('div',{class:'card',style:'padding:18px 22px'},R.name,R.bar,
+      h('div',{style:'display:flex;justify-content:space-between;margin-top:8px;font-size:15px;color:var(--mut)'},R.rem,R.pct)),
+    h('div',{role:'alert',style:'display:flex;align-items:center;gap:14px;padding:14px 18px;border-radius:10px;border:3px double var(--revBd);background:var(--revBg);color:var(--revFg)'},
+      ico('warn',28,'currentColor',2),
+      h('div',{style:'font-size:17px;line-height:1.4'},h('b',{text:'No cierres el navegador.'}),' La app lo usa para leer la historia clínica de cada paciente. Se cerrará solo al terminar.')),
+    h('div',{class:'card',style:'flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden'},
+      h('div',{class:'cap',style:'flex:none;padding:8px 16px;background:var(--surface2);border-bottom:1px solid var(--line)',text:'Registro en vivo'}),R.log)));
+  S.ana=R;S.anaBuilt=true;
+}
+function renderAnalyzing(){
+  const E=S.E;if(!E)return;
+  if(!S.anaBuilt)buildAnalyzing();
+  const R=S.ana;
+  const p=E.progreso||{actual:0,total:0,paciente:''};
+  const total=p.total||0,pct=total?Math.min(100,Math.round(p.actual/total*100)):0;
+  clear(R.name);
+  if(total){R.name.appendChild(h('span',{style:'font-variant-numeric:tabular-nums',text:'('+p.actual+'/'+total+') '}));R.name.appendChild(document.createTextNode(p.paciente||''));}
+  else R.name.textContent='Preparando…';
+  R.fill.style.width=pct+'%';
+  R.bar.setAttribute('aria-valuenow',String(pct));
+  R.rem.textContent=!total?'Preparando…':(p.actual>=total?'Terminando…':'Faltan '+plural(total-p.actual,'paciente','pacientes'));
+  R.pct.textContent=pct+' %';
+  const lines=(E.registro||[]).slice(-7);
+  clear(R.log);
+  lines.forEach(l=>{const [t,m]=splitLog(l);
+    R.log.appendChild(h('div',{class:'logl','data-d':/^…/.test(m)?'0':'1',style:'white-space:nowrap;overflow:hidden;text-overflow:ellipsis'},
+      t?h('span',{style:'font-variant-numeric:tabular-nums;font-weight:700',text:t+' '}):null,m));});
+}
+async function cancelAnalyze(){
+  S.cancelling=true;
+  const r=await call('/api/cancelar',{});
+  if(!r.ok&&r.status!==0)say(r.data.mensaje||'No se pudo cancelar.');
+  setScene('main');poll();
+}
+
+/* ---------- Resultado ---------- */
+function renderResult(){
+  const E=S.E,R=E.resultado,box=$('sc-result');if(!R){setScene('main');return;}
+  const nAct=R.acciones.filter(a=>a.tipo==='ACTUALIZAR').length,nWarn=R.acciones.length-nAct;
+  const svs=new Set(R.kardex.map(k=>k.servicio));
+  const total=(E.progreso&&E.progreso.total)||R.sistema.length;
+  const cnt=t=>R.acciones.filter(a=>a.tipo===t).length;
+  const cards=[[R.sistema.length,'en el sistema','Pacientes en la Agenda de Hospital Office'],[R.kardex.length,'en el kardex','Pacientes en '+plural(svs.size,'servicio','servicios')],[nAct,'celdas por actualizar','Marcadas por defecto'],[nWarn,'avisos a revisar a mano','Agregar, retirar y revisar']];
+  const desc={ACTUALIZAR:'DX, evolución o tratamiento de un paciente que ya está. Se escribe al aprobar.',AGREGAR:'Está en el sistema y no en el kardex.',RETIRAR:'Está en el kardex y no en el sistema: probablemente alta.',REVISAR:'Cambio de habitación o servicio, o un aviso de la historia.'};
+  clear(box);
+  box.appendChild(h('div',{style:'padding:22px 40px;display:flex;flex-direction:column;gap:18px'},
+    h('div',{style:'display:flex;align-items:center;gap:14px'},
+      ico('check',36,'var(--updFg)',2.4),
+      h('div',{},h('h1',{style:'font-size:28px',text:'Resultado del análisis'}),h('div',{class:'sub',text:plural(total,'paciente revisado','pacientes revisados')+'. Todavía no se escribió nada en el kardex.'+(R.fecha?' ('+R.fecha+')':'')}))),
+    h('div',{style:'display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px'},
+      cards.map(c=>h('div',{class:'card',style:'padding:16px 18px'},
+        h('div',{style:'font-size:52px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums',text:String(c[0])}),
+        h('div',{style:'font-size:18px;font-weight:700;margin-top:8px',text:c[1]}),
+        h('div',{style:'font-size:14px;color:var(--mut);margin-top:2px',text:c[2]})))),
+    h('div',{style:'display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:14px'},
+      h('div',{class:'card',style:'padding:16px 18px'},
+        h('div',{style:'font-size:18px;font-weight:700;margin-bottom:10px',text:'Qué encontré, por tipo de acción'}),
+        TIPOS.map(t=>h('div',{style:'display:flex;align-items:center;gap:12px;padding:7px 0;border-top:1px solid var(--line)'},
+          tag(t,t,'width:132px;justify-content:flex-start'),
+          h('span',{style:'font-size:20px;font-weight:700;width:28px;text-align:right',text:String(cnt(t))}),
+          h('span',{style:'flex:1;font-size:15px;color:var(--mut)',text:desc[t]})))),
+      h('div',{class:'card',style:'padding:16px 18px'},
+        h('div',{style:'font-size:18px;font-weight:700;margin-bottom:10px',text:'Qué sigue'}),
+        h('ol',{style:'margin:0;padding-left:22px;font-size:16px;line-height:1.55'},
+          h('li',{text:'Revisa la lista y desmarca lo que no quieras escribir.'}),
+          h('li',{text:'Pulsa «3. Escribir en el kardex».'}),
+          h('li',{text:'Las filas AGREGAR, RETIRAR y REVISAR se hacen a mano en el Google Doc.'})))),
+    h('div',{style:'display:flex;gap:12px;justify-content:flex-end'},
+      h('button',{class:'btn big',type:'button',onclick:doAnalyze},'Volver a analizar'),
+      h('button',{class:'btn pri big',type:'button',onclick:()=>{S.tab='act';S.sel=null;S.query='';S.typeF='ALL';$('q').value='';$('typeF').value='ALL';ensureSel();setScene('main');}},'Revisar y aprobar cambios →'))));
+}
+
+/* ---------- Escritura terminada ---------- */
+function renderDone(){
+  const E=S.E,W=E.escritura,box=$('sc-done');
+  if(!W){setScene('main');return;}
+  const es=W.escritas||[],om=W.omitidas||[];
+  clear(box);
+  box.appendChild(h('div',{style:'flex:1;min-height:0;padding:22px 40px;display:flex;flex-direction:column;gap:16px'},
+    h('div',{style:'display:flex;align-items:center;gap:14px'},
+      ico('check',40,'var(--updFg)',2.4),
+      h('div',{},h('h1',{style:'font-size:28px',text:'Escritura terminada'}),
+        h('div',{style:'font-size:17px;color:var(--mut)'},h('b',{style:'color:var(--ink)',text:plural(es.length,'celda escrita','celdas escritas')}),' en el KARDEX · '+plural(om.length,'omitida','omitidas')))),
+    h('div',{style:'flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px'},
+      h('div',{class:'card',style:'min-height:0;display:flex;flex-direction:column;overflow:hidden'},
+        h('div',{style:'flex:none;padding:10px 16px;background:var(--surface2);border-bottom:1px solid var(--line);font-size:16px;font-weight:700',text:'Celdas escritas ('+es.length+')'}),
+        h('div',{style:'flex:1;min-height:0;overflow:auto'},
+          es.length?es.map(w=>h('div',{style:'display:flex;align-items:center;gap:10px;padding:8px 16px;border-bottom:1px solid var(--line);font-size:15px'},
+            h('span',{'aria-hidden':'true',style:'color:var(--updFg);font-weight:700',text:'✓'}),
+            h('span',{style:'flex:1;min-width:0;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis',text:w.paciente}),
+            h('span',{style:'color:var(--mut)',text:w.campo||'—'})))
+          :h('div',{style:'padding:18px 16px;color:var(--mut);font-size:15px',text:'No se escribió ninguna celda.'}))),
+      h('div',{class:'card',style:'min-height:0;display:flex;flex-direction:column;overflow:hidden'},
+        h('div',{style:'flex:none;padding:10px 16px;background:var(--surface2);border-bottom:1px solid var(--line);font-size:16px;font-weight:700',text:'Omitidas ('+om.length+')'}),
+        h('div',{style:'flex:1;min-height:0;overflow:auto'},
+          om.length?om.map(o=>h('div',{style:'padding:10px 16px;border-bottom:1px solid var(--line)'},
+            h('div',{style:'display:flex;gap:10px;align-items:center;font-size:15px;flex-wrap:wrap'},tag('REVISAR','OMITIDA','height:24px'),h('b',{text:o.paciente}),h('span',{style:'color:var(--mut)',text:o.campo||'—'})),
+            h('div',{style:'font-size:15px;line-height:1.45;margin-top:4px'},h('b',{text:'Motivo: '}),o.motivo||'')))
+          :h('div',{style:'padding:18px 16px;color:var(--mut);font-size:15px',text:'No se omitió ninguna celda.'})))),
+    h('div',{style:'display:flex;align-items:center;gap:14px;padding:12px 16px;border-radius:10px;background:var(--priSoft);border:1px solid var(--line2)'},
+      h('span',{style:'flex:1;font-size:16px;line-height:1.45'},h('b',{text:'¿Algo salió mal?'}),' En el Google Doc ve a ',h('b',{text:'Archivo → Historial de versiones'}),' y restaura la versión anterior. Las celdas omitidas quedan en la lista para hacerlas a mano.'),
+      h('button',{class:'btn',type:'button',onclick:openDoc},'Abrir el kardex'),
+      h('button',{class:'btn pri',type:'button',onclick:()=>setScene('main')},'Volver al inicio'))));
+}
+async function openDoc(){
+  const r=await call('/api/abrir',{que:'kardex'});
+  if(!r.ok)say(r.data.mensaje||'No se pudo abrir el kardex.');
+}
+
+/* ---------- Error ---------- */
+function errInfo(E){
+  const er=E.error||{codigo:'otro',mensaje:''};
+  const nav=E.config.navegador==='brave'?'Brave':'Chrome';
+  const retry=()=>doAnalyze(),toSet=()=>setScene('settings'),toMain=()=>setScene('main');
+  const T={
+    sesion:{tag:'RETIRAR',label:'SESIÓN',title:'Tu sesión venció',body:'Hospital Office o Google cerraron la sesión guardada. Por seguridad hay que entrar de nuevo. No se perdió ni se cambió nada en el kardex.',steps:['Pulsa «Iniciar sesión de nuevo».','Entra a Hospital Office y a Google en el navegador que se abre.','Cierra el navegador y vuelve a pulsar «2. Analizar».'],first:['Iniciar sesión de nuevo',()=>setScene('login')],second:['Volver al inicio',toMain]},
+    kardex:{tag:'RETIRAR',label:'KARDEX',title:'No puedo abrir el kardex',body:'La app no pudo entrar al documento «KARDEX MIS PX». Puede que el enlace esté mal escrito o que tu cuenta de Google no tenga permiso para verlo.',steps:['Revisa el enlace del kardex en Ajustes.','Confirma que usaste la misma cuenta de Google al iniciar sesión.','Pide acceso al responsable del kardex si hace falta.'],first:['Revisar el enlace en Ajustes',toSet],second:['Reintentar',retry]},
+    agenda:{tag:'RETIRAR',label:'AGENDA',title:'No encontré la Agenda',body:'En Hospital Office no apareció la Agenda de hoy, así que no puedo saber qué pacientes siguen hospitalizados. No se cambió nada.',steps:['Abre Hospital Office y confirma que la Agenda carga.','Revisa el enlace de la Agenda en Ajustes.','Vuelve a pulsar «2. Analizar».'],first:['Revisar el enlace de la Agenda',toSet],second:['Reintentar',retry]},
+    navegador:{tag:'RETIRAR',label:'NAVEGADOR',title:'No encontré Chrome ni Brave',body:'La app necesita Google Chrome o Brave para leer la historia clínica y abrir el kardex. No se cambió nada.',steps:['Instala Google Chrome o Brave en este computador.','Cierra esta aplicación y ábrela de nuevo.','Revisa el navegador elegido en Ajustes y vuelve a pulsar «2. Analizar».'],first:['Ir a Ajustes',toSet],second:['Reintentar',retry]},
+    credenciales:{tag:'REVISAR',label:'GOOGLE DOCS',title:'Faltan las credenciales de Google',body:'Para escribir en el kardex la app necesita el archivo credentials.json de Google. Sin él solo puede leer y copiar texto.',steps:['Abre Ajustes.','En «Escribir en Google Docs» elige tu archivo credentials.json.','Vuelve a intentar la escritura.'],first:['Ir a Ajustes',toSet],second:['Volver al inicio',toMain]},
+    otro:{tag:'REVISAR',label:'ERROR',title:'Algo salió mal',body:'La app no pudo terminar la tarea. No se cambió nada en el kardex.',steps:['Pulsa «Reintentar».','Si se repite, cierra la app y ábrela de nuevo.','Revisa el detalle de abajo por si indica la causa.'],first:['Reintentar',retry],second:['Volver al inicio',toMain]}
+  };
+  const e=T[er.codigo]||T.otro;
+  return Object.assign({},e,{detalle:er.mensaje||''});
+}
+function renderError(){
+  const E=S.E,box=$('sc-error');
+  if(!E.error){setScene('main');return;}
+  const e=errInfo(E);
+  const sev=e.tag==='REVISAR'?['var(--revBg)','var(--revFg)','var(--revBd)']:['var(--retBg)','var(--retFg)','var(--retBd)'];
+  clear(box);
+  box.appendChild(h('div',{style:'flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:20px'},
+    h('div',{class:'card',role:'alert',style:'width:700px;max-width:100%;padding:28px 32px'},
+      h('div',{style:'display:flex;align-items:center;gap:16px;margin-bottom:14px'},
+        h('span',{'aria-hidden':'true',style:'flex:none;width:64px;height:64px;border-radius:32px;display:flex;align-items:center;justify-content:center;border:2px solid '+sev[2]+';background:'+sev[0]+';color:'+sev[1]},ico('warn',34,'currentColor',2)),
+        h('div',{},tag(e.tag,e.label),h('h1',{style:'margin:6px 0 0;font-size:28px',text:e.title}))),
+      h('p',{style:'margin:0 0 14px;font-size:18px;line-height:1.5',text:e.body}),
+      e.detalle?h('div',{style:'margin:0 0 14px;padding:10px 12px;border-radius:8px;border:1px solid var(--line2);background:var(--surface2);font-size:14px;line-height:1.45;overflow-wrap:anywhere'},h('b',{text:'Detalle: '}),e.detalle):null,
+      h('div',{class:'cap',style:'font-size:14px;margin-bottom:4px',text:'Qué hacer'}),
+      h('ol',{style:'margin:0 0 20px;padding-left:24px;font-size:17px;line-height:1.6'},e.steps.map(s=>h('li',{text:s}))),
+      h('div',{style:'display:flex;gap:12px;justify-content:flex-end'},
+        h('button',{class:'btn big',type:'button',onclick:e.second[1]},e.second[0]),
+        h('button',{class:'btn pri big',type:'button',onclick:e.first[1]},e.first[0])))));
+}
+
+/* ---------- Ajustes ---------- */
+function openSettings(){
+  const E=S.E,c=E?E.config:{};
+  S.draft={url_kardex:c.url_kardex||'',url_agenda:c.url_agenda||'',navegador:c.navegador||'chrome',especialistas:(c.especialistas||[]).slice()};
+  const box=$('sc-settings');clear(box);
+  const nav=E?E.navegadores:{chrome:true,brave:true};
+  const radio=(id,label)=>{
+    const inst=nav[id]!==false;
+    return h('label',{class:'radio'+(inst?'':' off'),for:'nav-'+id},
+      h('input',{type:'radio',name:'nav',id:'nav-'+id,class:'chk',checked:S.draft.navegador===id,disabled:!inst,onchange:()=>{S.draft.navegador=id;}}),
+      label,inst?null:h('span',{style:'font-size:14px;font-weight:400;color:var(--mut)',text:'No instalado'}));
+  };
+  const newSpec=h('input',{class:'inp',type:'text','aria-label':'Nombre del nuevo especialista',placeholder:'Agregar especialista',autocomplete:'off',onkeydown:ev=>{if(ev.key==='Enter'){ev.preventDefault();addSpec();}}});
+  function addSpec(){const v=newSpec.value.trim();if(!v)return;if(!S.draft.especialistas.includes(v))S.draft.especialistas.push(v);newSpec.value='';renderChips();newSpec.focus();}
+  const fi=h('input',{type:'file',accept:'.json,application/json',id:'credFile',hidden:true,onchange:onCredFile});
+  box.appendChild(h('div',{style:'flex:1;min-height:0;display:flex;flex-direction:column'},
+    h('div',{style:'flex:1;min-height:0;overflow:auto;padding:16px 40px 8px;display:flex;flex-direction:column;gap:14px'},
+      h('div',{style:'display:flex;align-items:center;gap:14px'},h('button',{class:'btn',type:'button',onclick:()=>setScene('main')},'← Volver'),h('h1',{style:'font-size:28px',text:'Ajustes'})),
+      h('div',{style:'display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:start'},
+        h('div',{style:'display:flex;flex-direction:column;gap:14px'},
+          h('div',{class:'card setcard'},h('h2',{text:'Enlaces'}),
+            h('label',{class:'lbl',for:'sk'},'Enlace del kardex (Google Doc)'),
+            h('input',{id:'sk',class:'inp',type:'text',value:S.draft.url_kardex,autocomplete:'off',spellcheck:'false',style:'margin:4px 0 12px',oninput:ev=>{S.draft.url_kardex=ev.target.value;}}),
+            h('label',{class:'lbl',for:'sa'},'Enlace de la Agenda (Hospital Office)'),
+            h('input',{id:'sa',class:'inp',type:'text',value:S.draft.url_agenda,autocomplete:'off',spellcheck:'false',style:'margin-top:4px',oninput:ev=>{S.draft.url_agenda=ev.target.value;}})),
+          h('div',{class:'card setcard'},h('h2',{text:'Navegador preferido'}),
+            h('div',{role:'radiogroup','aria-label':'Navegador preferido',style:'display:flex;gap:12px'},radio('chrome','Chrome'),radio('brave','Brave')),
+            h('div',{style:'font-size:14px;color:var(--mut);margin-top:10px',text:'Se usa para esta app, Hospital Office, el Google Doc y el inicio de sesión de Google.'})),
+          h('div',{class:'card setcard'},h('h2',{text:'Apariencia'}),h('button',{class:'btn',type:'button',id:'setTheme',onclick:toggleTheme}))),
+        h('div',{style:'display:flex;flex-direction:column;gap:14px'},
+          h('div',{class:'card setcard'},h('h2',{style:'margin-bottom:4px',text:'Especialistas'}),
+            h('div',{style:'font-size:15px;color:var(--mut);margin-bottom:10px',text:'Solo se toma la hoja de evolución de estas personas.'}),
+            h('div',{id:'chips',style:'display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px'}),
+            h('div',{style:'display:flex;gap:8px'},newSpec,h('button',{class:'btn',type:'button',onclick:addSpec},'Agregar'))),
+          h('div',{class:'card setcard'},
+            h('div',{style:'display:flex;align-items:center;gap:10px;margin-bottom:6px'},h('h2',{style:'margin:0',text:'Escribir en Google Docs'}),tag('NONE','OPCIONAL')),
+            h('div',{style:'font-size:15px;line-height:1.5;color:var(--mut);margin-bottom:12px',text:'Con credenciales, la app puede escribir en el kardex lo que apruebes. Sin ellas, la app solo lee y copia texto.'}),
+            h('div',{id:'credStat',style:'display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;border:1.5px solid var(--line2);background:var(--surface2);margin-bottom:12px;font-size:16px'}),
+            h('div',{id:'credBtns',style:'display:flex;gap:8px;flex-wrap:wrap'}),fi,
+            h('div',{style:'font-size:14px;color:var(--mut);margin-top:10px',text:'El archivo de credenciales (.json) se guarda solo en este computador.'}))))),
+    h('div',{style:'flex:none;display:flex;justify-content:flex-end;gap:12px;padding:12px 40px;border-top:1px solid var(--line);background:var(--surface)'},
+      h('button',{class:'btn',type:'button',onclick:()=>setScene('main')},'Cancelar'),
+      h('button',{class:'btn pri',type:'button',onclick:saveSettings},'Guardar ajustes'))));
+  renderChips();
+}
+function renderChips(){
+  const c=$('chips');if(!c)return;clear(c);
+  S.draft.especialistas.forEach((n,i)=>c.appendChild(h('span',{class:'chip'},n,h('button',{type:'button','aria-label':'Quitar a '+n,onclick:()=>{S.draft.especialistas.splice(i,1);renderChips();}},'✕'))));
+  if(!S.draft.especialistas.length)c.appendChild(h('span',{style:'color:var(--mut);font-size:15px',text:'No hay especialistas. Agrega al menos uno.'}));
+}
+function renderSettingsDyn(){
+  const E=S.E;if(!E||!$('credStat'))return;
+  const ok=E.credenciales;
+  const st=$('credStat');clear(st);
+  st.appendChild(h('span',{'aria-hidden':'true',style:'font-weight:700',text:ok?'✓':'○'}));
+  st.appendChild(h('span',{style:'flex:1;font-weight:700',text:ok?'Conectado: credentials.json cargado':'Sin conectar: la app solo lee y copia texto'}));
+  const b=$('credBtns'),hadFocus=b.contains(document.activeElement);
+  clear(b);
+  b.appendChild(h('button',{class:'btn',type:'button',onclick:()=>$('credFile').click()},ok?'Cambiar archivo de credenciales…':'Elegir archivo de credenciales…'));
+  if(ok)b.appendChild(h('button',{class:'btn',type:'button',onclick:quitarCred},'Quitar credenciales'));
+  const t=$('setTheme');if(t)t.textContent=themeNow()==='dark'?'Modo claro':'Modo oscuro';
+}
+function onCredFile(ev){
+  const f=ev.target.files&&ev.target.files[0];if(!f)return;
+  if(f.size>1000000){say('Ese archivo es demasiado grande para ser credentials.json.');ev.target.value='';return;}
+  const rd=new FileReader();
+  rd.onload=async()=>{
+    const r=await call('/api/credenciales',{contenido:String(rd.result||'')});
+    say(r.ok?'Credenciales guardadas.':(r.data.mensaje||'El archivo no es un credentials.json válido.'));
+    ev.target.value='';poll();
+  };
+  rd.onerror=()=>{say('No se pudo leer el archivo.');};
+  rd.readAsText(f);
+}
+async function quitarCred(){
+  const r=await call('/api/credenciales/quitar',{});
+  say(r.ok?'Credenciales quitadas.':(r.data.mensaje||'No se pudieron quitar las credenciales.'));poll();
+}
+async function saveSettings(){
+  const d=S.draft;
+  const esp=d.especialistas.map(x=>x.trim()).filter(Boolean);
+  if(!esp.length){say('Agrega al menos un especialista.');return;}
+  const r=await call('/api/config',{url_kardex:d.url_kardex.trim(),url_agenda:d.url_agenda.trim(),especialistas:esp,navegador:d.navegador});
+  if(!r.ok){say(r.data.mensaje||'No se pudieron guardar los ajustes.');return;}
+  if(r.data.config)S.E.config=r.data.config;
+  say('Ajustes guardados.');setScene('main');poll();
+}
+
+/* ---------- arranque ---------- */
+$('themeBtn').addEventListener('click',toggleTheme);
+$('setBtn').addEventListener('click',()=>{closeConfirmIf();setScene('settings');});
+function closeConfirmIf(){if(S.dlg)closeConfirm();}
+$('bLogin').addEventListener('click',goLogin);
+$('bAnalyze').addEventListener('click',doAnalyze);
+$('bWrite').addEventListener('click',goWrite);
+$('bCopy').addEventListener('click',copyNew);
+$('kurl').addEventListener('blur',saveKardexUrl);
+$('kurl').addEventListener('keydown',ev=>{if(ev.key==='Enter')ev.target.blur();});
+$('q').addEventListener('input',ev=>{S.query=ev.target.value;if(S.E){renderTable();}});
+$('typeF').addEventListener('change',ev=>{S.typeF=ev.target.value;if(S.E)renderTable();});
+if(window.matchMedia)try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',e=>{let t=null;try{t=localStorage.getItem('kardex-tema');}catch(x){}if(!t)applyTheme(e.matches?'dark':'light');});}catch(e){}
+initTheme();
+poll();
+})();
+</script>
+</body>
+</html>
