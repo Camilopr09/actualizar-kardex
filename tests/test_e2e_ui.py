@@ -137,7 +137,7 @@ def test_recorrido_completo(app, tmp_path):
         # ---- Un análisis cancelado no deja resultado
         page.click("#bAnalyze")
         expect(page.locator("#sc-analyzing")).to_be_visible()
-        expect(page.locator("#sc-analyzing")).to_contain_text(re.compile(r"\(\d+/27\)"))
+        expect(page.locator("#sc-analyzing")).to_contain_text(re.compile(r"\(\d+/29\)"))
         foto(page, "04-analizando")
         page.get_by_role("button", name="Cancelar").click()
         expect(page.locator("#sc-main")).to_be_visible()

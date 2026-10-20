@@ -781,7 +781,7 @@ function renderResult(){
   const total=(E.progreso&&E.progreso.total)||R.sistema.length;
   const cnt=t=>R.acciones.filter(a=>a.tipo===t).length;
   const cards=[[R.sistema.length,'en el sistema','Pacientes en la Agenda de Hospital Office'],[R.kardex.length,'en el kardex','Pacientes en '+plural(svs.size,'servicio','servicios')],[nAct,'celdas por actualizar','Marcadas por defecto'],[nWarn,'avisos a revisar a mano','Agregar, retirar y revisar']];
-  const desc={ACTUALIZAR:'DX, evolución o tratamiento de un paciente que ya está. Se escribe al aprobar.',AGREGAR:'Está en el sistema y no en el kardex.',RETIRAR:'Está en el kardex y no en el sistema: probablemente alta.',REVISAR:'Cambio de habitación o servicio, o un aviso de la historia.'};
+  const desc={ACTUALIZAR:'DX, evolución o tratamiento de un paciente que ya está. Se escribe al aprobar.',AGREGAR:'Atendido en el sistema y no en el kardex (solo si Hospital Office muestra la lista de atendidos).',RETIRAR:'Está en el kardex y no en el sistema: probablemente alta.',REVISAR:'Cambio de habitación o servicio, o un aviso de la historia.'};
   clear(box);
   box.appendChild(h('div',{style:'padding:22px 40px;display:flex;flex-direction:column;gap:18px'},
     h('div',{style:'display:flex;align-items:center;gap:14px'},

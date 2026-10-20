@@ -8,9 +8,10 @@ import flujo
 import sistema
 from chromium_pruebas import disponible
 from errores import ErrorApp
-from simulador.servidor import CLAVE, USUARIO, Simulador
+from simulador.servidor import CLAVE, GRID_PEND, USUARIO, Simulador
 
 CHROMIUM = disponible()
+VENCE = 12              # petición protegida en la que vence la sesión
 pytestmark = pytest.mark.skipif(CHROMIUM is None, reason="falta playwright o Chromium")
 
 
@@ -41,23 +42,28 @@ def test_analizar_contra_el_simulador():
         (pacientes, kardex, acciones), registro, avance = _analizar(sim)
 
     por = {p.nombre: p for p in pacientes}
-    assert len(pacientes) == 6 and len(kardex) == 6
-    # modos y casilla «Últimas 24 horas»: ESCOBAR solo aparece si se desmarca
-    assert por["ESCOBAR TRUJILLO IVAN"].modo == "Urgencias" and por["ESCOBAR TRUJILLO IVAN"].habitacion == "U-07"
-    assert por["ALVARADO RUIZ PEDRO PABLO"].modo == "Hospitalización"
-    assert por["ALVARADO RUIZ PEDRO PABLO"].habitacion == "2-01"
-    # progreso: solo los pacientes que están en el kardex y en el sistema (5)
-    assert [(i, n) for i, n, _ in avance] == [(i, 5) for i in range(1, 6)]
+    # solo los pacientes del kardex que están en el sistema (7 de 8): la lista general del hospital NO se trae
+    assert len(kardex) == 8 and len(pacientes) == 7
+    assert "ROSARIO QUIJANO LOPEZ" not in por and "ELSA MARINA ROJAS DIAZ" not in por
+    # progreso: n = pacientes del kardex (también los que no aparecen)
+    assert [(i, n) for i, n, _ in avance] == [(i, 8) for i in range(1, 9)]
+    # modo preferido según el servicio: ESCOBAR está en «PISO 5» (Hospitalización) pero es de Urgencias -> prueba el otro
+    esc = por["IVAN ESCOBAR TRUJILLO"]
+    assert esc.modo == "Urgencias" and esc.habitacion == "H4CAM-09" and esc.documento == "1020304055"
+    assert por["PEDRO PABLO ALVARADO RUIZ"].modo == "Hospitalización"
+    assert por["PEDRO PABLO ALVARADO RUIZ"].habitacion == "6PISO-607"
+    assert por["PEDRO PABLO ALVARADO RUIZ"].tipo_documento == "CC" and por["PEDRO PABLO ALVARADO RUIZ"].estado == "P"
+    # «Actualizar» se pulsó con «Últimas 24 horas» desmarcada en los dos modos
+    assert ("Hospitalización", False) in sim.actualizaciones and ("Urgencias", False) in sim.actualizaciones
 
     # ---- ALVARADO: toma la hoja del ESPECIALISTA más reciente (no la de enfermería, más nueva)
-    a = por["ALVARADO RUIZ PEDRO PABLO"]
+    a = por["PEDRO PABLO ALVARADO RUIZ"]
     assert a.encontrado_detalle and not a.aviso
     assert a.dx == "1. COLECISTITIS AGUDA\n2. HTA"
     assert a.medico == "DAZA PEREZ JUAN" and a.fecha == "19/10/2026 06:30"
     assert a.evolucion == ("19/10/2026 - DR. DAZA PEREZ JUAN (MEDICINA INTERNA)\n"
                            "EXAMEN FISICO: ALERTA, SIN DOLOR ANALISIS: EVOLUCION FAVORABLE")
     assert "NO DEBE LEERSE" not in a.tratamiento and "OTRO DX" not in a.dx
-    # PLAN sin «igual manejo»: el tratamiento es el plan tal cual
     assert a.tratamiento == "PLAN\n1. DIETA LIQUIDA\n2. CEFAZOLINA 1 G IV C/8H\n3. OMEPRAZOL 40 MG IV C/24H"
     for campo in ("DX", "EVOLUCIÓN", "TRATAMIENTO"):
         act = _acc(acciones, "PEDRO ALVARADO", "ACTUALIZAR", campo)
@@ -65,7 +71,7 @@ def test_analizar_contra_el_simulador():
             "DX": "DX:\n" + a.dx, "EVOLUCIÓN": a.evolucion, "TRATAMIENTO": a.tratamiento}[campo]
 
     # ---- BENAVIDES: IGUAL MANEJO conserva el tratamiento del kardex y suma lo nuevo de las órdenes
-    b = por["BENAVIDES LUNA SOFIA"]
+    b = por["SOFIA BENAVIDES LUNA"]
     assert b.tratamiento.splitlines() == ["IGUAL MANEJO (DR. FABIAN GOMEZ LUIS 19/10/2026)", "NVO",
                                           "CEFTRIAXONA 2 G — 2 G IV C/24H", "DIETA BLANDA",
                                           "ENOXAPARINA 40 MG — 40 MG SC C/24H"]
@@ -73,25 +79,52 @@ def test_analizar_contra_el_simulador():
     assert bt.nuevo == b.tratamiento and bt.actual.splitlines()[0] == "PLAN"
     assert not _acc(acciones, "SOFIA BENAVIDES LUNA", "ACTUALIZAR", "DX")      # el DX ya coincide
 
-    # ---- CORREA: kardex al día -> ninguna acción
+    # ---- CORREA: kardex al día y habitación «CUB 12» ≡ «HOS82-12» -> ninguna acción
     assert not [x for x in acciones if x.paciente == "TOMAS CORREA MEJIA"]
 
-    # ---- DUQUE: solo hay hoja de una persona que no es especialista -> aviso REVISAR
-    d = por["DUQUE SALAS MARIA ELENA"]
+    # ---- DUQUE: solo hay hoja de una persona que no es especialista -> aviso REVISAR (y «305B» ≡ «3PISO-305B»)
+    d = por["MARIA ELENA DUQUE SALAS"]
     assert "no es de un especialista" in d.aviso and "TORRES NIETO ROSA" in d.aviso
     rev = _acc(acciones, "MARIA DUQUE SALAS", "REVISAR")
     assert len(rev) == 1 and "especialista" in rev[0].detalle and not rev[0].automatica
 
-    # ---- GUTIERREZ: otra habitación -> REVISAR HABITACIÓN
+    # ---- habitaciones: «607» ≡ «6PISO-607», «426» ≡ «4PISO-426», «CUB 9» ≡ «H4CAM-09», PASILLO no se compara
+    for nombre in ("PEDRO ALVARADO", "SOFIA BENAVIDES LUNA", "IVAN ESCOBAR TRUJILLO", "HERNAN PALACIOS"):
+        assert not _acc(acciones, nombre, "REVISAR", "HABITACIÓN"), nombre
     hab = _acc(acciones, "LAURA GUTIERREZ OSORIO", "REVISAR", "HABITACIÓN")
-    assert hab and (hab[0].actual, hab[0].nuevo) == ("4-05", "4-08")
+    assert len(hab) == 1 and (hab[0].actual, hab[0].nuevo) == ("405", "4PISO-408")
+    assert len([x for x in acciones if x.campo == "HABITACIÓN"]) == 1
 
-    # ---- AGREGAR / RETIRAR
-    ag = [x for x in acciones if x.tipo == "AGREGAR"]
-    assert [x.paciente for x in ag] == ["ESCOBAR TRUJILLO IVAN"] and not ag[0].automatica
+    # ---- HERNAN PALACIOS: el nombre del kardex no se parece, pero el documento coincide
+    j = por["JAIRO ANDRES MONTENEGRO VEGA"]
+    assert j.encontrado_detalle and j.habitacion == "PEDIA-07"
+    assert _acc(acciones, "HERNAN PALACIOS", "ACTUALIZAR", "DX")
+    assert not _acc(acciones, "HERNAN PALACIOS", "RETIRAR")
+
+    # ---- RETIRAR: no aparece en ningún modo (y no se confunde con la tocaya ELSA MARINA ROJAS DIAZ)
     ret = [x for x in acciones if x.tipo == "RETIRAR"]
     assert [x.paciente for x in ret] == ["ELSA FIGUEROA PARDO"] and ret[0].servicio == "URGENCIAS"
+    # ---- AGREGAR: sin lista de atendidos no se propone ningún paciente (la lista general es de todo el hospital)
+    assert not [x for x in acciones if x.tipo == "AGREGAR"]
+    assert registro.count("No hay lista de pacientes atendidos: no se proponen pacientes nuevos") == 1
     assert any("Leyendo la Agenda" in linea for linea in registro)
+
+
+@pytest.mark.parametrize("pag_cliente", [True, False])
+def test_agregar_solo_desde_atendidos_con_paginacion(pag_cliente):
+    # la grilla de atendidos (inexistente en el sistema real; respaldo) tiene páginas de 2 filas:
+    # GUTIERREZ y DUQUE (del kardex) en la 1.ª y QUIJANO (no está en el kardex) en la 2.ª
+    with Simulador(con_atendidos=True, tam_atendidos=2, pag_cliente=pag_cliente) as sim:
+        (pacientes, _, acciones), registro, _ = _analizar(sim)
+    por = {p.nombre: p for p in pacientes}
+    # los del kardex que ya fueron atendidos se encuentran en la grilla de atendidos y se leen completos
+    assert por["MARIA ELENA DUQUE SALAS"].aviso and por["LAURA GUTIERREZ OSORIO"].encontrado_detalle
+    ag = [x for x in acciones if x.tipo == "AGREGAR"]
+    assert [x.paciente for x in ag] == ["ROSARIO QUIJANO LOPEZ"] and not ag[0].automatica and not ag[0].marcada
+    assert ag[0].habitacion == "3PISO-311"
+    # nunca de la lista «Pacientes Por Atender» (ELSA MARINA ROJAS DIAZ, PEDRO NEL SIERRA CANO, rellenos…)
+    assert len(pacientes) == 8 and len(ag) == 1
+    assert not any("No hay lista de pacientes atendidos" in linea for linea in registro)
 
 
 def test_cancelar_se_revisa_antes_de_cada_paciente():
@@ -110,7 +143,7 @@ def test_login_automatico_con_credenciales_correctas():
     with Simulador() as sim:
         (pacientes, _, _), registro, avance = _analizar(sim)
         assert sim.logins == 1
-    assert len(pacientes) == 6 and len(avance) == 5
+    assert len(pacientes) == 7 and len(avance) == 8
     assert not any(CLAVE in linea for linea in registro)
 
 
@@ -144,16 +177,18 @@ def test_sin_credenciales_espera_a_que_la_persona_inicie_sesion(monkeypatch, dat
         if hecho["t0"] and not hecho["login"] and time.monotonic() - hecho["t0"] > 2:
             hecho["login"] = True
             pg = ctxs[0].pages[0]
-            pg.fill("input[type=text]", USUARIO)
+            pg.click("input[type=text]")
+            pg.keyboard.press("Control+A")
+            pg.keyboard.type(USUARIO)
             pg.fill("input[type=password]", CLAVE)
-            pg.click("text=Ingresar")
+            pg.click("input[type=image]")
         return False
     registro, avance, esperas = [], [], []
     with Simulador() as sim:
         (pacientes, _, _) = flujo.analizar(
             _cfg(sim), registro.append, lambda i, n, nombre: (esperas if i == 0 else avance).append((i, n, nombre)),
             cancelado)[0:3]
-    assert hecho["login"] and len(pacientes) == 6 and len(avance) == 5
+    assert hecho["login"] and len(pacientes) == 7 and len(avance) == 8
     assert esperas == [(0, 0, "Esperando inicio de sesión…")]
 
 
@@ -171,35 +206,25 @@ def test_sin_credenciales_se_puede_cancelar_la_espera(datos_temporales):
 
 
 def test_sesion_que_vence_a_mitad_se_vuelve_a_iniciar():
-    with Simulador(vence_tras=12) as sim:
+    with Simulador(vence_tras=VENCE) as sim:
         (pacientes, _, acciones), registro, avance = _analizar(sim)
         assert sim.logins == 2                      # el segundo login es el re-login
-    por = {p.nombre: p for p in pacientes}
-    assert all(p.encontrado_detalle for p in pacientes if p.nombre in
-               {"ALVARADO RUIZ PEDRO PABLO", "BENAVIDES LUNA SOFIA", "CORREA MEJIA TOMAS",
-                "DUQUE SALAS MARIA ELENA", "GUTIERREZ OSORIO LAURA"}), [p.aviso for p in por.values()]
-    assert len(avance) == 5
+    assert all(p.encontrado_detalle for p in pacientes if not p.aviso), [p.aviso for p in pacientes]
+    assert len(pacientes) == 7 and len(avance) == 8
 
 
-def test_navegacion_por_menu_principal_y_atencion_de_pacientes():
+def test_navegacion_por_el_acordeon_menu_principal_y_atencion_de_pacientes():
     with Simulador() as sim:
         (pacientes, _, _), _, _ = _analizar(sim)
-        assert any(s["menu"] for s in sim.sesiones.values())     # pasó por /Menu.aspx
-    assert len(pacientes) == 6
+        assert any(s["menu"] for s in sim.sesiones.values())     # pasó por «Atencion de Pacientes»
+    assert len(pacientes) == 7
 
 
-def test_agenda_directa_sin_menu_no_basta_y_sin_enlaces_es_error_de_agenda():
-    # el simulador ya no entrega la Agenda sin pasar por el menú; si el menú no existe, error «agenda»
-    with Simulador() as sim:
-        sim.agenda_requiere_menu = True
-        import simulador.servidor as m
-        original = m.MENU
-        m.MENU = "<html><body><h1>Menú vacío</h1></body></html>"
-        try:
-            with pytest.raises(ErrorApp) as e:
-                _analizar(sim)
-        finally:
-            m.MENU = original
+def test_sin_enlace_de_atencion_de_pacientes_es_error_de_agenda():
+    # el simulador no entrega la grilla sin pasar por el menú; si el menú no trae el enlace, error «agenda»
+    with Simulador(con_atencion_en_menu=False) as sim:
+        with pytest.raises(ErrorApp) as e:
+            _analizar(sim)
     assert e.value.codigo == "agenda"
 
 
@@ -212,19 +237,19 @@ def test_kardex_inaccesible_produce_error_kardex():
 
 
 def test_fallo_de_agenda_en_un_paciente_no_aborta_el_analisis():
-    # visitas 1 y 2: listado (Urgencias / Hospitalización); visita 3: la Agenda de ALVARADO (el primero del kardex)
-    # (ir_agenda se recupera una vez: la segunda visita también está rota para que el paciente falle)
+    # visita 1: entrada; 2: búsqueda de ALVARADO (el primero del kardex); 3 y 4: su historia (la 4.ª es el
+    # intento de recuperación de ir_agenda: también rota para que el paciente falle)
     with Simulador(agenda_rota_en=[3, 4]) as sim:
         (pacientes, _, acciones), registro, avance = _analizar(sim)
     por = {p.nombre: p for p in pacientes}
-    assert "No pude leer su historia" in por["ALVARADO RUIZ PEDRO PABLO"].aviso
-    assert not por["ALVARADO RUIZ PEDRO PABLO"].encontrado_detalle
-    assert por["BENAVIDES LUNA SOFIA"].encontrado_detalle        # los demás siguieron
-    assert len(avance) == 5
+    assert "No pude leer su historia" in por["PEDRO PABLO ALVARADO RUIZ"].aviso
+    assert not por["PEDRO PABLO ALVARADO RUIZ"].encontrado_detalle
+    assert por["SOFIA BENAVIDES LUNA"].encontrado_detalle        # los demás siguieron
+    assert len(avance) == 8
     assert _acc(acciones, "PEDRO ALVARADO", "REVISAR")
 
 
-def test_agenda_sin_grillas_en_el_listado_es_error_de_agenda():
+def test_agenda_sin_grillas_al_entrar_es_error_de_agenda():
     with Simulador(agenda_rota_en=[1]) as sim:
         with pytest.raises(ErrorApp) as e:
             _analizar(sim)
@@ -257,3 +282,116 @@ def test_iniciar_sesion_con_login_no_cuenta_hospital():
             return len(llamadas) > 3
         pasos = _sesion(sim, terminar=terminar)
     assert all(p == {"hospital": False, "google": False} for p in pasos)
+
+
+# ---------------------------------------------------------------- pruebas con el Sistema directo
+@pytest.fixture
+def sis(tmp_path):
+    """Fábrica de Sistema contra un simulador: sis(sim, con_credenciales=True) -> Sistema (el navegador se cierra al final)."""
+    from playwright.sync_api import sync_playwright
+    cerrar = []
+
+    def fabrica(sim, credenciales=True):
+        pw = sync_playwright().start()
+        ctx = sistema.abrir_contexto(pw, tmp_path / "perfil", "chrome", lambda m: None)
+        cerrar.append((pw, ctx))
+        return sistema.Sistema(ctx, _cfg(sim), lambda m: None, tmp_path / "diag",
+                               credenciales={"usuario": USUARIO, "clave": CLAVE} if credenciales else None)
+    yield fabrica
+    for pw, ctx in cerrar:
+        try:
+            ctx.close()
+        finally:
+            pw.stop()
+
+
+@pytest.mark.parametrize("boton", ["image", "enlace", "enter"])
+def test_login_con_watermark_y_boton_entrar_como_imagen(sis, boton):
+    with Simulador(boton_login=boton) as sim:
+        s = sis(sim)
+        s.page.goto(sim.url_agenda)
+        assert sistema.pagina_pide_login(s.page)
+        assert s.page.input_value("#txtUsuario") == "Usuario"         # texto guía, no un valor real
+        assert s.page.locator("button, input[type=submit]").count() == 0
+        s.asegurar_sesion()
+        assert sim.logins == 1
+        assert "(Salir)" in s.page.inner_text("body") and "DashBoard" in s.page.inner_text("body")
+
+
+@pytest.mark.parametrize("desplegado", [False, True])
+@pytest.mark.parametrize("id_pend", [None, "ctl00_cph1_cbpPanel1_grdPorAtender"])
+def test_acordeon_y_grilla_por_id_o_por_titulo(sis, desplegado, id_pend):
+    with Simulador(menu_desplegado=desplegado, id_pend=id_pend) as sim:
+        s = sis(sim)
+        s.ir_agenda()
+        # «Menu Principal» no se vuelve a pulsar si ya estaba desplegado (pulsarlo pliega el acordeón)
+        assert s.grid_pend == (id_pend or GRID_PEND)
+        assert "Atencion De Pacientes" in s.page.inner_text("body")
+        assert s._filas(s.grid_pend)
+
+
+def test_actualizar_es_necesario_para_que_la_grilla_cambie(pagina):
+    with Simulador(exige_login=False, agenda_requiere_menu=False) as sim:
+        pagina.goto(sim.url_agenda)
+        antes = pagina.locator(f'[id^="{GRID_PEND}_DXDataRow"] td:first-child').all_inner_texts()
+        assert "TOMAS CORREA MEJIA" in antes and "SOFIA BENAVIDES LUNA" not in antes     # abre en Urgencias
+        pagina.get_by_label("Hospitalización").check()
+        pagina.get_by_label("Últimas 24 horas.").uncheck()
+        pagina.wait_for_timeout(800)
+        assert pagina.locator(f'[id^="{GRID_PEND}_DXDataRow"] td:first-child').all_inner_texts() == antes   # sin Actualizar
+        pagina.get_by_text("Actualizar", exact=True).click()
+        pagina.wait_for_function("() => !ASPxClientControl.GetControlCollection().elements['%s'].InCallback()" % GRID_PEND)
+        pagina.wait_for_timeout(500)
+        despues = pagina.locator(f'[id^="{GRID_PEND}_DXDataRow"] td:first-child').all_inner_texts()
+        assert despues != antes and "TOMAS CORREA MEJIA" not in despues
+    assert ("Hospitalización", False) in sim.actualizaciones
+
+
+@pytest.mark.parametrize("opciones", [
+    {}, {"filtro_contiene": True}, {"campos_legibles": True}, {"autofilter_roto": True}, {"pag_cliente": False}])
+def test_buscar_por_documento_aunque_el_nombre_este_mal(sis, opciones):
+    with Simulador(**opciones) as sim:
+        s = sis(sim)
+        p = s.buscar("HERNAN PALACIOS", "1020304057", "CC", ["Hospitalización", "Urgencias"])
+        assert p and p.nombre == "JAIRO ANDRES MONTENEGRO VEGA" and p.documento == "1020304057"
+        assert (p.tipo_documento, p.habitacion, p.estado, p.modo) == ("CC", "PEDIA-07", "P", "Hospitalización")
+        # tras cambiar de columna de filtro (documento -> nombre) no queda el filtro anterior
+        assert s.buscar("ELSA FIGUEROA PARDO", "1020309999", "CC", ["Urgencias", "Hospitalización"]) is None
+        # sin documento: filtra por Paciente (primera palabra) y empareja por nombre; no toma al tocayo
+        q = s.buscar("PEDRO ALVARADO", "", "", ["Hospitalización", "Urgencias"])
+        assert q and q.nombre == "PEDRO PABLO ALVARADO RUIZ" and q.documento == "1020304051"
+
+
+@pytest.mark.parametrize("pag_cliente", [True, False])
+def test_lectura_completa_recorre_todas_las_paginas(sis, pag_cliente):
+    with Simulador(pag_cliente=pag_cliente) as sim:
+        s = sis(sim)
+        s.ir_agenda()
+        s._modo("Hospitalización")
+        filas = s._leer_todo(s.grid_pend)
+        assert len(filas) > 10 and {f["pagina"] for f in filas} >= {0, 1}
+        assert len({(f["nombre"], f["numero"]) for f in filas}) == len(filas)        # sin repetidos
+
+
+@pytest.fixture
+def pagina():
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        b = pw.chromium.launch(executable_path=CHROMIUM, headless=True, args=["--no-sandbox"])
+        yield b.new_page()
+        b.close()
+
+
+def test_detecta_el_login_por_password_o_por_texto_ehc_con_entrar(pagina):
+    def pide(html):
+        pagina.set_content(html)
+        return sistema.pagina_pide_login(pagina)
+    assert pide('<input type="text" value="Usuario"><input type="password">')
+    # sin campo password, pero con el texto de eHC y el botón ENTRAR (imagen, o con «entrar» en id/alt)
+    pie = "<p>Software Asistencial eHC - Desarrollado por el Departamento de Sistemas</p>"
+    assert pide(f'<input type="text">{pie}<input type="image" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="40" height="20">')
+    assert pide(f'<input type="text">{pie}<div id="btnEntrar" style="width:40px;height:20px"></div>')
+    assert pide(f'<input type="text">{pie}<a href="#"><img alt="ENTRAR" width="40" height="20"></a>')
+    # el mismo pie en otra página (sin botón ENTRAR) no es un login; un password oculto tampoco
+    assert not pide(f"<h2>DashBoard del Usuario</h2>{pie}")
+    assert not pide('<input type="password" style="display:none"><p>hola</p>')

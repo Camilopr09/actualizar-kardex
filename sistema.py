@@ -5,14 +5,15 @@ import time
 from datetime import datetime
 
 import navegador
-from comparar import PacienteSistema, emparejar
+from comparar import MODOS_AGENDA, PacienteSistema, emparejar, parsear_identificacion
 from errores import Cancelado, ErrorApp
 from notas import (construir_tratamiento, interpretar_evolucion, interpretar_ordenes, normalizar)
 
 GRID_PEND = "ctl00_cph1_cbpPanel1_grdPendientes"
 GRID_ATEN = "ctl00_cph1_cbpPanel1_grdAtendidos"
 GRID_FORM = "ctl00_cph1_ASPxRoundPanel2_grdFormatos"
-MODOS = ("Urgencias", "Hospitalización")
+MODOS = MODOS_AGENDA
+_COLS_DEFECTO = {"paciente": 0, "identificacion": 1, "admision": 2, "convenio": 3, "habitacion": 4, "estado": 5}
 
 
 def abrir_contexto(pw, carpeta, preferido, log):
@@ -36,12 +37,86 @@ def abrir_contexto(pw, carpeta, preferido, log):
         raise ErrorApp("navegador", f"No pude abrir {nombre.capitalize()}: {_primera_linea(e)}") from e
 
 
+_JS_AYUDAS = r"""
+const quitar = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+const borde = s => quitar(s).replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '');
+const vis = e => {
+  const r = e.getBoundingClientRect();
+  if (!(r.width > 0 && r.height > 0)) return false;
+  for (let a = e; a && a.nodeType === 1; a = a.parentElement) {
+    const cs = getComputedStyle(a);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+    if (a !== e && a.tagName !== 'BODY' && a.tagName !== 'HTML' && cs.overflow !== 'visible') {
+      const q = a.getBoundingClientRect();
+      if (q.width <= 0 || q.height <= 0 || r.bottom <= q.top || r.top >= q.bottom || r.right <= q.left || r.left >= q.right) return false;
+    }
+  }
+  return true;
+};
+const ctl = id => {
+  try {
+    const col = ASPxClientControl.GetControlCollection();
+    let c = col.elements[id];
+    if (!c) c = Object.values(col.elements).find(x => x && (x.name === id || (x.GetMainElement && (x.GetMainElement() || {}).id === id)));
+    return c || null;
+  } catch (e) { return null; }
+};
+const pwVisible = () => [...document.querySelectorAll('input')].find(e => (e.getAttribute('type') || '').toLowerCase() === 'password' && vis(e));
+// elementos que parecen el botón ENTRAR: imagen/envío, o id/name/alt/title/value/texto con «entrar» (el más interno)
+const botonesEntrar = () => {
+  const c = [...document.querySelectorAll('a, img, div, span, input')].filter(e => {
+    if (!vis(e)) return false;
+    const t = ['id', 'name', 'alt', 'title', 'value'].map(a => quitar(e.getAttribute(a)));
+    if (e.children.length <= 1 && (e.innerText || '').length < 30) t.push(quitar(e.innerText));
+    return t.some(x => x.includes('entrar'));
+  });
+  return c.filter(e => !c.some(o => o !== e && e.contains(o)));
+};
+"""
+
+
+def _js(cuerpo):
+    """Función JS lista para page.evaluate: «(arg) => { ayudas + cuerpo }»."""
+    return "(arg) => {" + _JS_AYUDAS + cuerpo + "}"
+
+
+_JS_PIDE_LOGIN = _js("""
+  if (pwVisible()) return true;
+  if (!quitar(document.body ? document.body.innerText : '').includes('software asistencial ehc')) return false;
+  return botonesEntrar().length > 0 || [...document.querySelectorAll('input[type=image], input[type=submit]')].some(vis);
+""")
+
+_JS_GRILLAS = _js("""
+  const buscar = (id, titulo) => {
+    if (id && document.getElementById(id)) return id;
+    const els = [...document.querySelectorAll('td, th, span, div, h1, h2, h3, h4, caption')]
+      .filter(e => borde(e.innerText) === titulo && vis(e));
+    for (const e of els) {
+      for (let a = e.closest('table'); a; a = a.parentElement ? a.parentElement.closest('table') : null) {
+        if (a.id && document.querySelector('[id^="' + a.id + '_DX"]')) return a.id;
+      }
+    }
+    return null;
+  };
+  return [buscar(arg[0], 'pacientes por atender'), buscar(arg[1], 'pacientes atendidos')];
+""")
+
+
 def pagina_pide_login(page):
-    """True si la página es un inicio de sesión (URL con «login» o campo de contraseña visible)."""
+    """True si la página es un inicio de sesión: URL con «login», campo de contraseña visible, o el texto
+    «Software Asistencial eHC» con un botón ENTRAR (imagen, envío o con «entrar» en su id/alt/texto)."""
     if "login" in page.url.lower():
         return True
     try:
-        return page.locator("input[type=password]").first.is_visible(timeout=500)
+        return bool(page.evaluate(_JS_PIDE_LOGIN))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def hay_grilla(page):
+    """True si la página muestra la grilla «Pacientes Por Atender» (por id o por su título) o la de atendidos."""
+    try:
+        return any(page.evaluate(_JS_GRILLAS, [GRID_PEND, GRID_ATEN]))
     except Exception:  # noqa: BLE001
         return False
 
@@ -73,6 +148,11 @@ class Sistema:
         self.progreso = progreso or (lambda i, n, nombre: None)
         self.cancelado = cancelado or (lambda: False)
         self._url_grilla = None         # URL donde se vio la grilla la última vez
+        self.grid_pend = GRID_PEND      # id real de la grilla «Pacientes Por Atender» (se descubre al verla)
+        self.grid_aten = GRID_ATEN
+        self._filtros = {}              # grilla -> {columna: texto} filtros puestos en esta carga de la página
+        self._cols = {}                 # (grilla, columna) -> (posición, campo) descubiertos
+        self._modo_actual = None
         self.page = contexto.pages[0] if contexto.pages else contexto.new_page()
         self.page.set_default_timeout(20000)
 
@@ -93,31 +173,252 @@ class Sistema:
                 " return !c || !c.InCallback(); }", arg=grid, timeout=15000)
         except Exception:  # noqa: BLE001
             pass
-        self.page.wait_for_timeout(400)
+        self.page.wait_for_timeout(300)
 
     def _filtrar(self, grid, columna, texto):
+        """Filtro por AutoFilterByColumn (grilla de formatos)."""
         self.page.evaluate(
             "([g,c,t]) => { const x = ASPxClientControl.GetControlCollection().elements[g];"
             " if (x) x.AutoFilterByColumn(c, t); }", [grid, columna, texto])
         self._esperar_grid(grid)
 
+    # ------------------------------------------------------------ lectura de grillas (Agenda)
+    def _buscar_grillas(self):
+        """(id de pendientes o None, id de atendidos o None) en la página actual; recuerda los ids reales."""
+        try:
+            p, a = self.page.evaluate(_JS_GRILLAS, [self.grid_pend, self.grid_aten])
+        except Exception:  # noqa: BLE001
+            return None, None
+        if p:
+            self.grid_pend = p
+        if a:
+            self.grid_aten = a
+        return p, a
+
+    def _grillas(self):
+        """Grillas presentes ahora, pendientes primero."""
+        return [g for g in self._buscar_grillas() if g]
+
+    def _ver_grilla(self, ms):
+        """True si aparece alguna grilla de la Agenda dentro de ms milisegundos."""
+        for _ in range(max(1, ms // 300)):
+            if any(self._buscar_grillas()):
+                return True
+            self.page.wait_for_timeout(300)
+        return False
+
+    def _estado_grilla(self, grid):
+        """(en callback, firma de las filas visibles) o None si la página está cambiando."""
+        try:
+            return self.page.evaluate(_js(
+                "const c = ctl(arg); return [c && c.InCallback ? !!c.InCallback() : false,"
+                " [...document.querySelectorAll('[id^=\"' + arg + '_DXDataRow\"]')].map(t => t.innerText).join('|')];"), grid)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _esperar_cambio(self, grid, antes, minimo=1500, maximo=12000):
+        """Espera a que termine el callback de la grilla o a que cambien sus filas."""
+        t0 = time.monotonic()
+        visto = False
+        while True:
+            self.page.wait_for_timeout(150)
+            ms = (time.monotonic() - t0) * 1000
+            est = self._estado_grilla(grid)
+            if est:
+                if est[0]:
+                    visto = True
+                elif visto or est[1] != antes:
+                    self.page.wait_for_timeout(300)
+                    return
+            if ms >= (maximo if visto else minimo):
+                return
+
+    def _datos_columnas(self, grid):
+        return self.page.evaluate(_js("""
+          const h = document.getElementById(arg + '_DXHeadRow');
+          const c = ctl(arg);
+          const cols = [];
+          if (c && c.GetColumnsCount) for (let i = 0; i < c.GetColumnsCount(); i++) {
+            const k = c.GetColumn(i);
+            if (k) cols.push([String(k.fieldName || ''), String(k.name || ''), String(k.caption || k.Caption || ''), i, k.visible !== false]);
+          }
+          return {head: h ? [...h.children].map(td => borde(td.innerText)) : [], cols: cols};
+        """), grid)
+
+    def _columna(self, grid, caption):
+        """(posición de la columna en la tabla, campo para AutoFilterByColumn) de la columna con ese título."""
+        clave = (grid, caption)
+        if clave in self._cols:
+            return self._cols[clave]
+        try:
+            d = self._datos_columnas(grid)
+        except Exception:  # noqa: BLE001
+            return None, None
+        head, cols = d["head"], d["cols"]
+        pos = head.index(caption) if caption in head else None
+        campo = None
+        for fn, nm, cp, i, _v in cols:                     # 1) por el nombre del campo / caption del cliente
+            if any(caption in normalizar(x).lower() for x in (fn, nm, cp)):
+                campo = fn or i
+                break
+        if campo is None and pos is not None:               # 2) por la posición del encabezado
+            vis = [c for c in cols if c[4]]
+            base = vis if len(vis) == len(head) else cols
+            if pos < len(base):
+                campo = base[pos][0] or base[pos][3]
+        if pos is not None or campo is not None:
+            self._cols[clave] = (pos, campo)
+        return pos, campo
+
     def _filas(self, grid):
-        return self.page.evaluate(
-            """g => [...document.querySelectorAll(`[id^="${g}_DXDataRow"]`)].map(tr =>
-                 [...tr.querySelectorAll('td')].map(td => td.innerText.trim()))""", grid)
+        """Filas de datos de la página actual de la grilla, como dicts."""
+        crudo = self.page.evaluate(_js("""
+          const h = document.getElementById(arg + '_DXHeadRow');
+          return {head: h ? [...h.children].map(td => borde(td.innerText)) : [],
+                  filas: [...document.querySelectorAll('[id^="' + arg + '_DXDataRow"]')]
+                    .map(tr => [...tr.children].map(td => (td.innerText || '').trim()))};
+        """), grid)
+        head = crudo["head"]
+        idx = {k: (head.index(k) if k in head else d) for k, d in _COLS_DEFECTO.items()}
+        filas = []
+        for celdas in crudo["filas"]:
+            if len(celdas) <= max(idx["paciente"], idx["identificacion"], idx["habitacion"]):
+                continue
+            nombre = re.sub(r"\s+", " ", celdas[idx["paciente"]]).strip()
+            if not nombre:
+                continue
+            tipo, numero = parsear_identificacion(celdas[idx["identificacion"]])
+            g = lambda k: re.sub(r"\s+", " ", celdas[idx[k]]).strip() if idx[k] < len(celdas) else ""  # noqa: E731
+            filas.append({"nombre": nombre, "tipo": tipo, "numero": numero, "admision": g("admision"),
+                          "habitacion": g("habitacion"), "estado": g("estado"), "pagina": 0})
+        return filas
+
+    def _js_cliente(self, grid, expresion, arg=None):
+        """Evalúa una expresión sobre el control cliente de la grilla (c); None si no existe."""
+        return self.page.evaluate(_js("const c = ctl(arg[0]); if (!c) return null; const a = arg[1]; " + expresion),
+                                  [grid, arg])
+
+    def _ir_pagina(self, grid, k):
+        self._js_cliente(grid, "if (c.GotoPage) c.GotoPage(a);", k)
+        self._esperar_grid(grid)
+
+    def _boton_siguiente(self, grid):
+        """Marca y devuelve True si hay un botón de página siguiente habilitado."""
+        return self.page.evaluate(_js("""
+          document.querySelectorAll('[data-kardex-sig]').forEach(e => e.removeAttribute('data-kardex-sig'));
+          const zona = [...document.querySelectorAll('[id^="' + arg + '_DXPager"]')];
+          for (const z of zona) for (const e of z.querySelectorAll('a, img, span, td')) {
+            if (!vis(e) || /disabled/i.test(e.className || '')) continue;
+            const oc = e.getAttribute('onclick') || '';
+            const t = borde(e.innerText) || quitar(e.getAttribute('alt') || e.getAttribute('title'));
+            if (/PBN/.test(oc) || ['siguiente', 'next', '>', 'sig'].includes(t) || /^[>›»]/.test((e.innerText || '').trim())) {
+              if (e.tagName === 'SPAN' && !/PBN/.test(oc)) continue;
+              e.setAttribute('data-kardex-sig', '1'); return true;
+            }
+          }
+          return false;
+        """), grid)
+
+    def _leer_todo(self, grid, max_paginas=300):
+        """Todas las filas de la grilla, recorriendo sus páginas (GotoPage del cliente DevExpress;
+        respaldo: botón de página siguiente)."""
+        try:
+            n = self._js_cliente(grid, "return c.GetPageCount ? c.GetPageCount() : null;")
+        except Exception:  # noqa: BLE001
+            n = None
+        if isinstance(n, int) and n >= 1:
+            todas = []
+            for k in range(min(n, max_paginas)):
+                if k:
+                    self._ir_pagina(grid, k)
+                for f in self._filas(grid):
+                    f["pagina"] = k
+                    todas.append(f)
+            if n > 1:
+                self._ir_pagina(grid, 0)
+            return todas
+        todas, vistas = [], set()
+        for k in range(max_paginas):
+            filas = self._filas(grid)
+            firma = tuple((f["nombre"], f["numero"]) for f in filas)
+            if firma in vistas:
+                break
+            vistas.add(firma)
+            for f in filas:
+                f["pagina"] = k
+                todas.append(f)
+            if not self._boton_siguiente(grid):
+                break
+            antes = self._estado_grilla(grid)
+            self.page.locator("[data-kardex-sig]").first.click(timeout=5000)
+            self._esperar_cambio(grid, antes[1] if antes else "", minimo=1200)
+        return todas
+
+    def _filtro_js(self, grid, campo, texto):
+        self._js_cliente(grid, "if (c.AutoFilterByColumn) c.AutoFilterByColumn(a[0], a[1]);", [campo, texto])
+        self._esperar_grid(grid)
+
+    def _filtro_escrito(self, grid, pos, texto):
+        """Respaldo: escribe en el input de la fila de filtros de esa columna y Enter."""
+        celda = self.page.locator(f'[id="{grid}_DXFilterRow"] > td').nth(pos)
+        caja = celda.locator("input[type=text], input:not([type])").first
+        antes = self._estado_grilla(grid)
+        caja.click(timeout=5000)
+        self.page.keyboard.press("Control+A")
+        if texto:
+            self.page.keyboard.type(texto)
+        else:
+            self.page.keyboard.press("Delete")
+        self.page.keyboard.press("Enter")
+        self._esperar_cambio(grid, antes[1] if antes else "", minimo=1200)
+
+    def _contiene(self, caption, fila, texto):
+        if caption == "identificacion":
+            return re.sub(r"\D", "", texto) in fila["numero"] or re.sub(r"\D", "", texto) == ""
+        return normalizar(texto) in normalizar(fila["nombre"])
+
+    def _poner_filtro(self, grid, caption, texto):
+        """Deja la grilla filtrada SOLO por esa columna (quita antes el filtro de las otras columnas puestas por nosotros)."""
+        activos = self._filtros.setdefault(grid, {})
+        for otra in [c for c, t in activos.items() if c != caption and t]:
+            self._cambiar_filtro(grid, otra, "")
+            activos[otra] = ""
+        self._cambiar_filtro(grid, caption, texto)
+        activos[caption] = texto
+
+    def _cambiar_filtro(self, grid, caption, texto):
+        pos, campo = self._columna(grid, caption)
+        hecho = False
+        if campo is not None:
+            try:
+                self._filtro_js(grid, campo, texto)
+                hecho = self._filtro_aplicado(grid, caption, pos, texto)
+            except Exception:  # noqa: BLE001
+                hecho = False
+        if not hecho and pos is not None:
+            self._filtro_escrito(grid, pos, texto)
+
+    def _filtro_aplicado(self, grid, caption, pos, texto):
+        """¿AutoFilterByColumn hizo efecto? DevExpress muestra el filtro en el input de la fila de filtros; si no
+        se puede mirar ese input, se mira que alguna fila cumpla el filtro (con filas y ninguna que cumpla = no hizo nada)."""
+        if pos is not None:
+            valor = self.page.evaluate(
+                "([g, p]) => { const r = document.getElementById(g + '_DXFilterRow'); const c = r && r.children[p];"
+                " const i = c && c.querySelector('input[type=text], input:not([type])'); return i ? i.value : null; }",
+                [grid, pos])
+            if valor is not None:
+                return valor.strip().lower() == (texto or "").strip().lower()
+        filas = self._filas(grid)
+        return not texto or not filas or any(self._contiene(caption, f, texto) for f in filas)
+
+    def _filtrar_y_leer(self, grid, caption, texto, todas=False):
+        self._poner_filtro(grid, caption, texto)
+        return self._leer_todo(grid, 8) if todas else self._filas(grid)
 
     # ------------------------------------------------------------ agenda
     def _pide_login(self):
         """True si la página actual es un inicio de sesión."""
         return pagina_pide_login(self.page)
-
-    def _ver_grilla(self, ms):
-        """True si aparece alguna grilla de la Agenda dentro de ms milisegundos."""
-        try:
-            self.page.wait_for_selector(f"#{GRID_PEND}, #{GRID_ATEN}", timeout=ms)
-            return True
-        except Exception:  # noqa: BLE001
-            return False
 
     def _esperar_carga(self):
         try:
@@ -132,6 +433,19 @@ class Sistema:
         except Exception:  # noqa: BLE001  (la página está navegando)
             return True
 
+    def _login_ok(self):
+        """Ya se entró: se ve «(Salir)»/«Salir», «DashBoard» o la grilla, o ya no hay pantalla de login."""
+        try:
+            if self.page.evaluate(_js(
+                    "const t = quitar(document.body ? document.body.innerText : '');"
+                    " return /\\bsalir\\b/.test(t) || t.includes('dashboard');")):
+                return True
+            if any(self._buscar_grillas()):
+                return True
+        except Exception:  # noqa: BLE001  (navegando)
+            return False
+        return not self._sigue_login()
+
     def _vaciar_clave(self):
         """Borra el campo de contraseña de la página (valor y atributo) antes de guardar un diagnóstico."""
         try:
@@ -142,35 +456,55 @@ class Sistema:
             pass
 
     def _escribir_credenciales(self):
-        """Rellena usuario (el input de texto visible más cercano antes del de contraseña) y contraseña."""
-        hay = self.page.evaluate(
-            """() => {
-              const vis = e => !!(e.offsetParent || e.getClientRects().length) && getComputedStyle(e).visibility !== 'hidden';
-              document.querySelectorAll('[data-kardex-u]').forEach(e => e.removeAttribute('data-kardex-u'));
-              document.querySelectorAll('[data-kardex-p]').forEach(e => e.removeAttribute('data-kardex-p'));
-              const todos = [...document.querySelectorAll('input')];
-              const pw = todos.find(e => (e.getAttribute('type') || '').toLowerCase() === 'password' && vis(e));
-              if (!pw) return false;
-              pw.setAttribute('data-kardex-p', '1');
-              for (let i = todos.indexOf(pw) - 1; i >= 0; i--) {
-                const t = (todos[i].getAttribute('type') || 'text').toLowerCase();
-                if ((t === 'text' || t === 'email') && vis(todos[i])) { todos[i].setAttribute('data-kardex-u', '1'); break; }
-              }
-              return true;
-            }""")
+        """Marca usuario (el input visible no-password más cercano antes del de contraseña) y contraseña, y los
+        rellena con clic + Ctrl+A + teclado (así funcionan los textos guía / watermark de DevExpress)."""
+        hay = self.page.evaluate(_js("""
+          document.querySelectorAll('[data-kardex-u]').forEach(e => e.removeAttribute('data-kardex-u'));
+          document.querySelectorAll('[data-kardex-p]').forEach(e => e.removeAttribute('data-kardex-p'));
+          const todos = [...document.querySelectorAll('input')];
+          const pw = pwVisible();
+          if (!pw) return false;
+          pw.setAttribute('data-kardex-p', '1');
+          for (let i = todos.indexOf(pw) - 1; i >= 0; i--) {
+            const t = (todos[i].getAttribute('type') || 'text').toLowerCase();
+            if (['text', 'email', 'search', 'tel'].includes(t) && vis(todos[i])) { todos[i].setAttribute('data-kardex-u', '1'); break; }
+          }
+          return true;
+        """))
         if not hay:
             raise ErrorApp("sesion", "No encontré el campo de contraseña en la página de inicio de sesión de Hospital Office.")
-        if self.page.locator("[data-kardex-u]").count():
-            self.page.fill("[data-kardex-u]", self.cred["usuario"])
-        self.page.fill("[data-kardex-p]", self.cred["clave"])
+        for marca, valor in (("data-kardex-u", self.cred["usuario"]), ("data-kardex-p", self.cred["clave"])):
+            caja = self.page.locator(f"[{marca}]")
+            if not caja.count():
+                continue
+            caja.first.click(timeout=5000)
+            self.page.keyboard.press("Control+A")
+            self.page.keyboard.type(valor)
 
     def _enviar_login(self):
-        patron = re.compile(r"ingresar|entrar|iniciar|login|aceptar", re.I)
-        for loc in (self.page.locator("button[type=submit]:visible, input[type=submit]:visible"),
-                    self.page.locator("button:visible, input[type=button]:visible, a:visible").filter(has_text=patron)):
+        """Botón de entrar: input[type=image], input[type=submit], button, algo con «entrar», una imagen dentro de
+        un enlace junto al formulario; si nada sirve, Enter en la contraseña."""
+        for sel in ("input[type=image]:visible", "input[type=submit]:visible", "button:visible"):
             try:
+                loc = self.page.locator(sel)
                 if loc.count():
                     loc.first.click(timeout=5000)
+                    return
+            except Exception:  # noqa: BLE001
+                continue
+        marca = "data-kardex-entrar"
+        for cuerpo in (
+                "const c = botonesEntrar(); if (!c.length) return false; c[0].setAttribute(arg, '1'); return true;",
+                "const pw = pwVisible();"
+                " const c = [...document.querySelectorAll('a img, a input[type=image]')].filter(vis);"
+                " if (!c.length) return false;"
+                " const d = c.filter(e => !pw || (pw.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING));"
+                " (d[0] || c[0]).setAttribute(arg, '1'); return true;"):
+            try:
+                self.page.evaluate(_js("document.querySelectorAll('[' + arg + ']').forEach(e => e.removeAttribute(arg));"
+                                       + cuerpo), marca)
+                if self.page.evaluate(_js("return !!document.querySelector('[' + arg + ']');"), marca):
+                    self.page.locator(f"[{marca}]").first.click(timeout=5000)
                     return
             except Exception:  # noqa: BLE001
                 continue
@@ -182,7 +516,7 @@ class Sistema:
         self._enviar_login()
         for _ in range(20):                      # hasta ~10 s
             self.page.wait_for_timeout(500)
-            if not self._sigue_login():
+            if self._login_ok():
                 self._esperar_carga()
                 return
         self._vaciar_clave()
@@ -213,27 +547,27 @@ class Sistema:
         else:
             self._esperar_persona()
 
-    def _clic_texto(self, fragmento, espera_ms):
-        """Pulsa un enlace/botón visible cuyo texto contiene fragmento (sin mayúsculas ni tildes)."""
+    def _clic_texto(self, fragmento, espera_ms, exacto=False):
+        """Pulsa un elemento visible cuyo texto contiene fragmento (o, con exacto, es exactamente fragmento,
+        sin contar íconos como «»» en los bordes). Sin mayúsculas ni tildes."""
         marca = "data-kardex-clic"
         for _ in range(max(1, espera_ms // 500)):
             try:
-                hay = self.page.evaluate(
-                    """([frag, marca]) => {
-                      const quitar = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
-                      const vis = e => !!(e.offsetParent || e.getClientRects().length);
-                      document.querySelectorAll('[' + marca + ']').forEach(e => e.removeAttribute(marca));
-                      const c = [...document.querySelectorAll('a, button, input[type=button], input[type=submit], [role=button], [role=menuitem], li, td, span, div')]
-                        .filter(e => vis(e) && quitar(e.tagName === 'INPUT' ? e.value : e.innerText).includes(frag));
-                      if (!c.length) return false;
-                      // el más específico: el que no contiene a otro candidato
-                      const hoja = c.filter(e => !c.some(o => o !== e && e.contains(o)));
-                      const pref = hoja.find(e => /^(A|BUTTON|INPUT)$/.test(e.tagName) || e.getAttribute('role'))
-                        || hoja.find(e => e.closest('a, button')) || hoja[0];
-                      const obj = pref.closest('a, button') || pref;
-                      obj.setAttribute(marca, '1');
-                      return true;
-                    }""", [fragmento, marca])
+                hay = self.page.evaluate(_js("""
+                  const [frag, marca, exacto] = arg;
+                  document.querySelectorAll('[' + marca + ']').forEach(e => e.removeAttribute(marca));
+                  const txt = e => e.tagName === 'INPUT' ? e.value : e.innerText;
+                  const c = [...document.querySelectorAll('a, button, input[type=button], input[type=submit], [role=button], [role=menuitem], li, td, span, div')]
+                    .filter(e => vis(e) && (exacto ? borde(txt(e)) === frag : quitar(txt(e)).includes(frag)));
+                  if (!c.length) return false;
+                  // el más específico: el que no contiene a otro candidato
+                  const hoja = c.filter(e => !c.some(o => o !== e && e.contains(o)));
+                  const pref = hoja.find(e => /^(A|BUTTON|INPUT)$/.test(e.tagName) || e.getAttribute('role'))
+                    || hoja.find(e => e.closest('a, button')) || hoja[0];
+                  const obj = pref.closest('a, button') || pref;
+                  obj.setAttribute(marca, '1');
+                  return true;
+                """), [fragmento, marca, exacto])
                 if hay:
                     self.page.locator(f"[{marca}]").first.click(timeout=5000)
                     return True
@@ -242,21 +576,43 @@ class Sistema:
             self.page.wait_for_timeout(500)
         return False
 
+    def _texto_visible(self, texto):
+        try:
+            return bool(self.page.evaluate(_js(
+                "return [...document.querySelectorAll('a, button, li, td, span, div')]"
+                ".some(e => vis(e) && borde(e.innerText) === arg);"), texto))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _esperar_texto(self, texto, ms):
+        for _ in range(max(1, ms // 250)):
+            if self._texto_visible(texto):
+                return True
+            self.page.wait_for_timeout(250)
+        return False
+
     def _por_el_menu(self):
-        """Desde la pantalla de inicio: «Menu Principal» y luego «Atención de pacientes»."""
-        pulso = False
-        if self._clic_texto("menu principal", 3000):
-            pulso = True
-            self._esperar_carga()
-        if self._ver_grilla(1500):
+        """Menú lateral tipo acordeón: pulsar la cabecera «Menu Principal» (solo si no está ya desplegada,
+        porque pulsarla otra vez la pliega), esperar «Atencion de Pacientes», pulsarlo y esperar la grilla."""
+        if self._ver_grilla(600):
             return True
-        if self._clic_texto("atencion de pacientes", 5000 if pulso else 3000):
-            pulso = True
-            self._esperar_carga()
-        return self._ver_grilla(15000) if pulso else False
+        if not self._texto_visible("atencion de pacientes"):
+            if not self._clic_texto("menu principal", 4000, exacto=True):
+                return False
+            if not self._esperar_texto("atencion de pacientes", 3000):
+                # la pulsación no desplegó nada (quizá estaba cerrándose): una vez más
+                self._clic_texto("menu principal", 1500, exacto=True)
+                if not self._esperar_texto("atencion de pacientes", 3000):
+                    return False
+        if not self._clic_texto("atencion de pacientes", 4000, exacto=True):
+            return False
+        self._esperar_carga()
+        return self._ver_grilla(15000)
 
     def ir_agenda(self):
-        """Deja la página en la Agenda con sus grillas. Siempre puede volver a iniciar sesión."""
+        """Deja la página en la pantalla «Atencion De Pacientes» con su grilla. Siempre puede volver a iniciar sesión."""
+        self._filtros = {}                     # página nueva: sin filtros ni modo elegido
+        self._modo_actual = None
         if self._url_grilla:
             try:
                 self.page.goto(self._url_grilla, wait_until="domcontentloaded")
@@ -266,63 +622,131 @@ class Sistema:
                 pass
             self._url_grilla = None            # la sesión venció o la página cambió: proceso completo
         self.asegurar_sesion()
-        if not self._ver_grilla(5000) and not self._por_el_menu():
+        if not self._ver_grilla(2500) and not self._por_el_menu():
             self.diagnostico("agenda")
             if self._pide_login():
                 raise ErrorApp("sesion", "Hospital Office pide iniciar sesión.")
             raise ErrorApp("agenda", "No se ve la Agenda de Hospital Office.")
         self._url_grilla = self.page.url
 
+    def _marcar_opcion(self, patron, tipo, deseado):
+        """Pone una opción (radio o casilla) en el estado deseado, buscándola por su etiqueta (patrón sobre el
+        texto normalizado). Lee el estado del input aunque esté oculto (DevExpress) y pulsa la etiqueta visible."""
+        info = self.page.evaluate(_js("""
+          document.querySelectorAll('[data-kardex-opt]').forEach(e => e.removeAttribute('data-kardex-opt'));
+          const re = new RegExp(arg[0]);
+          const c = [...document.querySelectorAll('label, span, td, div, a')].filter(e => vis(e) && re.test(borde(e.innerText)));
+          const hoja = c.filter(e => !c.some(o => o !== e && e.contains(o)));
+          if (!hoja.length) return null;
+          const e = hoja[0];
+          let inp = e.control || e.querySelector('input[type=' + arg[1] + ']');
+          for (let p = e.parentElement, n = 0; !inp && p && n < 3; p = p.parentElement, n++) {
+            const l = [...p.querySelectorAll('input[type=' + arg[1] + ']')];
+            inp = l.filter(i => (e.compareDocumentPosition(i) & Node.DOCUMENT_POSITION_PRECEDING)).pop() || l[0];
+          }
+          e.setAttribute('data-kardex-opt', '1');
+          return {checked: inp ? !!inp.checked : null};
+        """), [patron, tipo])
+        if not info:
+            return False
+        if info["checked"] is deseado:
+            return True
+        if info["checked"] is None and not deseado and tipo == "checkbox":
+            return False
+        self.page.locator("[data-kardex-opt]").first.click(timeout=3000)
+        self.page.wait_for_timeout(200)
+        return True
+
     def _modo(self, modo):
+        """Elige el radio del modo, quita «Últimas 24 horas» y pulsa «Actualizar» (sin eso la grilla no cambia);
+        espera a que termine el callback o cambie la grilla."""
+        patron = "^urgencias$" if modo == "Urgencias" else "^hospitalizacion$"
         try:
-            self.page.get_by_text(re.compile(modo, re.I)).first.click(timeout=3000)
-            self.page.wait_for_timeout(1200)
+            ok = self._marcar_opcion(patron, "radio", True)
         except Exception:  # noqa: BLE001
+            ok = False
+        if not ok:
             self.log(f"  (no pude cambiar a modo {modo}; se usa el que esté activo)")
         try:
-            self.page.get_by_label(re.compile("ltimas 24", re.I)).uncheck(timeout=2000)
-            self.page.wait_for_timeout(1200)
+            self._marcar_opcion("^ultimas 24", "checkbox", False)
         except Exception:  # noqa: BLE001
             pass
+        grid = self.grid_pend
+        antes = self._estado_grilla(grid)
+        if self._clic_texto("actualizar", 3000, exacto=True):
+            self._esperar_cambio(grid, antes[1] if antes else "")
+        else:
+            self.log("  (no encontré el botón «Actualizar»)")
+        self._modo_actual = modo
 
-    def listar(self):
-        """Todos los pacientes visibles en la Agenda (pendientes + atendidos) por modo."""
-        vistos = {}
+    # ------------------------------------------------------------ búsqueda de pacientes
+    def _paciente(self, f, modo):
+        return PacienteSistema(nombre=f["nombre"], habitacion=f["habitacion"], modo=modo, documento=f["numero"],
+                               tipo_documento=f["tipo"], admision=f["admision"], estado=f["estado"])
+
+    def _buscar_en_modo(self, nombre, documento, tipo, modo):
+        """Busca en la grilla (ya en ese modo). Devuelve (PacienteSistema, grilla, fila) o None.
+        Con documento filtra por Identificacion; si no hay (o no aparece) filtra por Paciente y empareja por nombre."""
+        doc = re.sub(r"\D", "", documento or "")
+        palabras = [t for t in normalizar(nombre).split() if len(t) >= 3]
+        for grid in self._grillas():
+            if doc:
+                for texto in dict.fromkeys([doc, f"{tipo} - {doc}" if tipo else ""]):
+                    if not texto:
+                        continue
+                    filas = self._filtrar_y_leer(grid, "identificacion", texto)
+                    for i, f in enumerate(filas):
+                        if f["numero"] == doc:
+                            return self._paciente(f, modo), grid, i, f["pagina"]
+            for pal in palabras[: (1 if doc else 3)]:
+                filas = self._filtrar_y_leer(grid, "paciente", pal, todas=True)
+                if doc:                                # otro documento = otra persona con nombre parecido
+                    filas = [f for f in filas if not f["numero"] or f["numero"] == doc]
+                nom = emparejar(nombre, [f["nombre"] for f in filas])
+                if nom:
+                    i = next(i for i, f in enumerate(filas) if f["nombre"] == nom)
+                    return self._paciente(filas[i], modo), grid, i, filas[i]["pagina"]
+        return None
+
+    def buscar(self, nombre, documento="", tipo="", modos=MODOS):
+        """Busca un paciente del kardex en la Agenda: en cada modo de `modos` (el preferido primero).
+        PacienteSistema (con su modo) o None si no aparece en ninguno."""
+        self.ir_agenda()
+        for modo in modos:
+            self._modo(modo)
+            r = self._buscar_en_modo(nombre, documento, tipo, modo)
+            if r:
+                return r[0]
+        return None
+
+    def leer_atendidos(self):
+        """Pacientes de la grilla de atendidos (todas sus páginas), de ambos modos. Lista vacía si no existe."""
+        res = []
         for modo in MODOS:
             self.ir_agenda()
             self._modo(modo)
-            for grid in (GRID_PEND, GRID_ATEN):
-                try:
-                    filas = self._filas(grid)
-                except Exception:  # noqa: BLE001
-                    continue
-                for f in filas:
-                    if len(f) < 5 or not f[0].strip():
-                        continue
-                    nombre = re.sub(r"\s+", " ", f[0]).strip()
-                    vistos.setdefault(nombre, PacienteSistema(nombre=nombre, habitacion=f[4].strip(), modo=modo))
-            self.log(f"{modo}: {sum(1 for p in vistos.values() if p.modo == modo)} pacientes")
-        if not vistos:
-            self.diagnostico("listado-vacio")
-        return list(vistos.values())
+            if not self._buscar_grillas()[1]:
+                continue
+            res += [self._paciente(f, modo) for f in self._leer_todo(self.grid_aten)]
+        return res
 
     # ------------------------------------------------------------ historia
     def _atender(self, p):
         self.ir_agenda()
         self._modo(p.modo)
-        clave = p.nombre.split(" ")[0]
-        for grid in (GRID_PEND, GRID_ATEN):
-            self._filtrar(grid, "Paciente", clave)
-            filas = self.page.locator(f'[id^="{grid}_DXDataRow"]')
-            for i in range(filas.count()):
-                fila = filas.nth(i)
-                if normalizar(fila.locator("td").first.inner_text()) == normalizar(p.nombre):
-                    enlace = fila.get_by_text("Atender", exact=True)
-                    if enlace.count():
-                        enlace.first.click()
-                        self.page.wait_for_selector(f"#{GRID_FORM}", timeout=20000)
-                        return True
-        return False
+        r = self._buscar_en_modo(p.nombre, p.documento, p.tipo_documento, p.modo)
+        if not r:
+            return False
+        _, grid, i, pagina = r
+        if pagina:
+            self._ir_pagina(grid, pagina)
+        fila = self.page.locator(f'[id^="{grid}_DXDataRow"]').nth(i)
+        enlace = fila.get_by_text("Atender", exact=True)
+        if not enlace.count():
+            return False
+        enlace.first.click()
+        self.page.wait_for_selector(f"#{GRID_FORM}", timeout=20000)
+        return True
 
     def _leer_textareas(self):
         return self.page.evaluate("[...document.querySelectorAll('textarea')].map(t=>t.value).join('\\n')")

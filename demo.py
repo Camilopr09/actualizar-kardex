@@ -2,7 +2,7 @@
 Todos los nombres y datos son inventados."""
 import time
 
-from comparar import FilaKardex, PacienteSistema, comparar, emparejar
+from comparar import FilaKardex, PacienteSistema, buscar_paciente, comparar
 from errores import Cancelado
 
 PAUSA_SESION = 3.0     # segundos que «dura» iniciar sesión
@@ -26,6 +26,7 @@ _NOMBRES = [
     "VILLAMIL ARIAS NELLY STELLA", "GALVIS PEÑA HERNAN DARIO", "TOVAR LASSO ADRIANA MARCELA",
     "MEDINA CORREA OSCAR IVAN", "BOHORQUEZ SANTOS TERESA DE JESUS",
 ]
+# En el sistema real AGREGAR solo sale de una lista de atendidos (si existe); aquí se simula para mostrar los 4 tipos.
 _AGREGAR = [  # (nombre, habitación, modo, dx)
     ("IBAÑEZ ROMERO JUAN CAMILO", "6-11", "Hospitalización", "PANCREATITIS AGUDA BILIAR"),
     ("QUINTERO PAEZ MARIA EUGENIA", "UCI5-09", "Urgencias", "CHOQUE SEPTICO DE FOCO ABDOMINAL"),
@@ -122,17 +123,14 @@ class Demo:
         log(f"Kardex: {len(kardex)} pacientes")
         log("Leyendo la Agenda de Hospital Office…")
         log(f"Sistema: {len(sistema)} pacientes")
-        por_nombre = {p.nombre: p for p in sistema}
-        pares = []
-        for f in kardex:
-            nom = emparejar(f.nombre, por_nombre.keys(), f.documento)
-            if nom:
-                pares.append(nom)
-        for i, nom in enumerate(pares, 1):
+        # como en el análisis real: se recorre cada paciente del kardex (n = pacientes del kardex)
+        for i, f in enumerate(kardex, 1):
             if cancelado():
                 raise Cancelado()
-            progreso(i, len(pares), nom)
-            log(f"({i}/{len(pares)}) {nom}")
+            progreso(i, len(kardex), f.nombre)
+            log(f"({i}/{len(kardex)}) {f.nombre}")
+            if not buscar_paciente(f.nombre, f.documento, sistema):
+                log("  no aparece en el sistema")
             time.sleep(PAUSA_PACIENTE)
         return sistema, kardex, comparar(sistema, kardex)
 

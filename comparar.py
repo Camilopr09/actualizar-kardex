@@ -17,6 +17,10 @@ class PacienteSistema:
     tratamiento: str = ""   # ya construido con las reglas
     encontrado_detalle: bool = False
     aviso: str = ""
+    documento: str = ""         # solo el número («CC - 123» -> «123»)
+    tipo_documento: str = ""
+    admision: str = ""
+    estado: str = ""
 
 
 _TIPOS_DOC = ("CC", "TI", "RC", "CE", "PA", "PE", "PT", "MS", "AS", "CN", "NIT", "PP")
@@ -140,6 +144,10 @@ class FilaKardex:
         return interpretar_datos(self.datos)["documento"]
 
     @property
+    def tipo_documento(self):
+        return interpretar_datos(self.datos)["tipo_documento"]
+
+    @property
     def edad(self):
         return interpretar_datos(self.datos)["edad"]
 
@@ -196,6 +204,49 @@ def _puntaje(a, b):
     return (n / min(len(a), len(b)), n, round(suma, 6))
 
 
+_RE_IDENT = re.compile(r"^\s*([A-Za-z]{1,4})?[\s:.\-]*(\d[\d.\s]*)")
+
+
+def parsear_identificacion(texto):
+    """«CC - 1044618156» (a veces partido en 2 renglones) -> («CC», «1044618156»). ("", "") si no hay número."""
+    t = " ".join((texto or "").split())
+    m = _RE_IDENT.match(t)
+    if not m:
+        return "", ""
+    return (m.group(1) or "").upper(), re.sub(r"\D", "", m.group(2))
+
+
+MODOS_AGENDA = ("Urgencias", "Hospitalización")
+
+
+def modo_preferido(servicio):
+    """Servicio del kardex -> modo de la Agenda donde probablemente está: URGENCIAS… -> Urgencias."""
+    return "Urgencias" if normalizar(servicio).startswith("URGENCIAS") else "Hospitalización"
+
+
+def _sin_ceros(c):
+    return re.sub(r"(?<!\d)0+(?=\d)", "", c)
+
+
+def _codigo_hab(h):
+    t = normalizar(h)
+    t = re.sub(r"\b(CUBICULO|CUB|CAMA|HABITACION|HAB)\b\.?", " ", t)
+    return re.sub(r"\s+", "", t)
+
+
+def misma_habitacion(kardex, sistema):
+    """True si la habitación del kardex corresponde a la del sistema («607» ≡ «6PISO-607», «9» ≡ «HOS82-09»).
+    Si alguna no trae número (PASILLO…) no se puede decidir: se considera igual. Solo es distinta si lo es claramente."""
+    k, s = _codigo_hab(kardex), _codigo_hab(sistema)
+    if not k or not s or not any(c.isdigit() for c in k) or not any(c.isdigit() for c in s):
+        return True
+    if _sin_ceros(k) == _sin_ceros(s):
+        return True
+    if "-" in k:                    # el kardex trae su propio prefijo: debe coincidir entero
+        return False
+    return _sin_ceros(k) == _sin_ceros(s.rsplit("-", 1)[-1])
+
+
 def emparejar(nombre_kardex, candidatos, documento=""):
     """Busca el nombre del kardex entre los nombres del sistema. Tolera errores de escritura,
     tildes y el orden APELLIDOS NOMBRES. Devuelve None si no hay coincidencia clara o si dos
@@ -226,6 +277,24 @@ def emparejar(nombre_kardex, candidatos, documento=""):
     return puntajes[0][1]
 
 
+def buscar_paciente(nombre, documento, pacientes):
+    """PacienteSistema de la lista que corresponde al del kardex: primero por documento (sin importar el
+    nombre), luego por nombre. None si no hay coincidencia clara."""
+    pacientes = list(pacientes)
+    doc = re.sub(r"\D", "", documento or "")
+    if doc:
+        for p in pacientes:
+            if p.documento and re.sub(r"\D", "", p.documento) == doc:
+                return p
+    por_nombre = {}
+    for p in pacientes:
+        if doc and p.documento and re.sub(r"\D", "", p.documento) != doc:
+            continue                    # otro documento: es otra persona con nombre parecido
+        por_nombre.setdefault(p.nombre, p)
+    nom = emparejar(nombre, por_nombre.keys(), documento)
+    return por_nombre.get(nom) if nom else None
+
+
 def _igual(a, b):
     return normalizar(a) == normalizar(b)
 
@@ -249,21 +318,19 @@ def _resumen(nombre, habitacion, dx="", fecha="", medico=""):
 def comparar(sistema, kardex):
     """Devuelve lista de Accion. sistema: list[PacienteSistema], kardex: list[FilaKardex]."""
     acciones = []
-    por_nombre = {p.nombre: p for p in sistema}
     usados = set()
     for fila in kardex:
-        nom = emparejar(fila.nombre, por_nombre.keys(), fila.documento)
-        if not nom:
+        p = buscar_paciente(fila.nombre, fila.documento, sistema)
+        if not p:
             acciones.append(Accion("RETIRAR", fila.nombre, "", _resumen(fila.nombre, fila.habitacion, fila.dx), "",
                                    fila, f"No aparece en el sistema (¿alta?). Está en {fila.servicio}.",
                                    marcada=False, servicio=fila.servicio, habitacion=fila.habitacion))
             continue
-        usados.add(nom)
-        p = por_nombre[nom]
+        usados.add(id(p))
         if p.aviso:
             acciones.append(Accion("REVISAR", fila.nombre, detalle=p.aviso, fila=fila, marcada=False,
                                    servicio=fila.servicio, habitacion=fila.habitacion, sis=p))
-        if p.habitacion and fila.habitacion and not _igual(p.habitacion, fila.habitacion):
+        if p.habitacion and fila.habitacion and not misma_habitacion(fila.habitacion, p.habitacion):
             acciones.append(Accion("REVISAR", fila.nombre, "HABITACIÓN", fila.habitacion, p.habitacion,
                                    fila, "Habitación distinta (cambiar a mano; puede requerir mover de servicio)",
                                    marcada=False, servicio=fila.servicio, habitacion=fila.habitacion, sis=p))
@@ -280,8 +347,8 @@ def comparar(sistema, kardex):
             if nuevo and not _igual_campo(campo, nuevo, actual):
                 acciones.append(Accion("ACTUALIZAR", fila.nombre, campo, actual, con_prefijo(campo, nuevo, actual), fila,
                                        detalle, servicio=fila.servicio, habitacion=fila.habitacion, sis=p))
-    for nom, p in por_nombre.items():
-        if nom not in usados:
+    for p in sistema:
+        if id(p) not in usados:
             acciones.append(Accion("AGREGAR", p.nombre, "", "", _resumen(p.nombre, p.habitacion, p.dx, p.fecha, p.medico),
                                    None, f"En el sistema ({p.modo}, {p.habitacion}) y no en el kardex",
                                    marcada=False, servicio=p.modo, habitacion=p.habitacion, sis=p))

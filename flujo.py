@@ -7,7 +7,7 @@ from pathlib import Path
 import kardex_doc
 import navegador
 import secreto
-from comparar import comparar, emparejar
+from comparar import Accion, buscar_paciente, comparar, modo_preferido, MODOS_AGENDA
 from errores import Cancelado, ErrorApp
 
 NOMBRE = "Actualizar Kardex"
@@ -98,8 +98,7 @@ def _revisar_sesion(ctx, host_agenda):
             if host and host == host_agenda and not hospital:
                 # solo cuenta si ya se ve la Agenda: una pantalla de login a medio cargar
                 # no debe cerrar el navegador antes de tiempo
-                if (not sistema.pagina_pide_login(pg)
-                        and pg.locator(f"#{sistema.GRID_PEND}, #{sistema.GRID_ATEN}").count() > 0):
+                if not sistema.pagina_pide_login(pg) and sistema.hay_grilla(pg):
                     hospital = True
             elif (host in ("docs.google.com", "drive.google.com")
                   or host.endswith((".docs.google.com", ".drive.google.com"))):
@@ -179,22 +178,56 @@ def analizar(cfg, log, progreso, cancelado):
             s = sistema.Sistema(ctx, cfg, log, carpeta_datos() / "diagnostico",
                                 credenciales=hospital_credenciales(), progreso=progreso, cancelado=cancelado)
             log("Leyendo la Agenda de Hospital Office…")
-            pacientes = s.listar()
-            log(f"Sistema: {len(pacientes)} pacientes")
-            por_nombre = {p.nombre: p for p in pacientes}
-            filas = {}
-            for f in kardex:
-                nom = emparejar(f.nombre, por_nombre.keys(), f.documento)
-                if nom:
-                    filas[nom] = f
-            for i, (nom, f) in enumerate(filas.items(), 1):
+            s.ir_agenda()                       # aquí falla (sesión / agenda) si no se puede entrar
+            pacientes, fallidos = [], []
+            n = len(kardex)
+            for i, f in enumerate(kardex, 1):
                 if cancelado():
                     raise Cancelado()
-                progreso(i, len(filas), nom)
-                log(f"({i}/{len(filas)}) {nom}")
-                p = por_nombre[nom]
-                p.tratamiento = f.tratamiento      # base para «IGUAL MANEJO»
-                s.detalle(p)
+                progreso(i, n, f.nombre)
+                log(f"({i}/{n}) {f.nombre}")
+                try:
+                    pref = modo_preferido(f.servicio)
+                    modos = [pref] + [m for m in MODOS_AGENDA if m != pref]
+                    p = s.buscar(f.nombre, f.documento, f.tipo_documento, modos)
+                    if not p:
+                        log("  no aparece en el sistema")
+                        continue
+                    if any((p.documento and x.documento == p.documento) or x.nombre == p.nombre for x in pacientes):
+                        continue                       # dos filas del kardex para la misma persona
+                    p.tratamiento = f.tratamiento      # base para «IGUAL MANEJO»
+                    s.detalle(p)
+                    pacientes.append(p)
+                except Cancelado:
+                    raise
+                except ErrorApp as e:
+                    if e.codigo == "sesion":
+                        raise
+                    fallidos.append((f, e.mensaje))
+                    s.diagnostico("buscar")
+                except Exception as e:  # noqa: BLE001
+                    fallidos.append((f, str(e).splitlines()[0] if str(e) else e.__class__.__name__))
+                    s.diagnostico("buscar")
+            # AGREGAR: solo desde la lista de atendidos (si existe). La grilla «Pacientes Por Atender» es de TODO
+            # el hospital: nunca se usa para proponer pacientes nuevos.
+            try:
+                atendidos = s.leer_atendidos()
+            except ErrorApp as e:
+                if e.codigo == "sesion":
+                    raise
+                atendidos = []
+            except Cancelado:
+                raise
+            except Exception:  # noqa: BLE001
+                atendidos = []
+            if not atendidos:
+                log("No hay lista de pacientes atendidos: no se proponen pacientes nuevos")
+            for a in atendidos:
+                if any(buscar_paciente(f.nombre, f.documento, [a]) for f in kardex):
+                    continue
+                if not any(x.documento and x.documento == a.documento or x.nombre == a.nombre for x in pacientes):
+                    pacientes.append(a)
+            log(f"Sistema: {len(pacientes)} pacientes")
         except ErrorApp as e:
             if e.codigo == "sesion" and e.mensaje.startswith(sistema.Sistema.MSG_LOGIN_MALO):
                 # no reintentar con una clave mala en cada análisis: podría bloquear la cuenta
@@ -207,7 +240,12 @@ def analizar(cfg, log, progreso, cancelado):
                 ctx.close()
             except Exception:  # noqa: BLE001
                 pass
-    return pacientes, kardex, comparar(pacientes, kardex)
+    perdidos = {id(f) for f, _ in fallidos}
+    acciones = comparar(pacientes, [f for f in kardex if id(f) not in perdidos])
+    for f, motivo in fallidos:          # no se pudo buscar: no es lo mismo que «no aparece»
+        acciones.append(Accion("REVISAR", f.nombre, detalle=f"No pude buscarlo en el sistema: {motivo}", fila=f,
+                               marcada=False, servicio=f.servicio, habitacion=f.habitacion))
+    return pacientes, kardex, acciones
 
 
 def aplicar(cfg, acciones, log):

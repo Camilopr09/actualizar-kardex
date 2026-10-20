@@ -47,3 +47,43 @@ def test_revisar_habitacion_y_aviso():
     hab = next(a for a in acc if a.campo == "HABITACIÓN")
     assert (hab.actual, hab.nuevo) == ("H-1", "H-9")
     assert all(a.servicio == "PISO 3" and a.habitacion == "H-1" and not a.automatica for a in acc)
+
+
+def test_parsear_identificacion():
+    from comparar import parsear_identificacion
+    assert parsear_identificacion("CC - 1044618156") == ("CC", "1044618156")
+    assert parsear_identificacion("RC -\n1108769206") == ("RC", "1108769206")
+    assert parsear_identificacion("CC 63338316") == ("CC", "63338316")
+    assert parsear_identificacion("") == ("", "")
+
+
+def test_misma_habitacion():
+    from comparar import misma_habitacion as m
+    assert m("607", "6PISO-607") and m("426", "4PISO-426") and m("305B", "3PISO-305B") and m("332A", "3PISO-332A")
+    assert m("9", "HOS82-09") and m("09", "HOS82-09") and m("CUB 9", "HOS82-09") and m("CUB 12", "H4CAM-12")
+    assert m("PASILLO", "6PISO-607") and m("", "6PISO-607") and m("607", "")      # sin número: no se puede comparar
+    assert m("2-01", "2-01") and m("U-03", "U-03")
+    assert not m("405", "4PISO-408") and not m("305B", "3PISO-305") and not m("4-05", "4-08")
+    assert not m("UCI5-09", "UCI5-02") and not m("2-01", "3-01")
+
+
+def test_emparejar_por_documento_sin_importar_el_nombre():
+    from comparar import buscar_paciente
+    a = PacienteSistema("JAIRO ANDRES MONTENEGRO VEGA", "PEDIA-07", "Hospitalización", documento="1020304057")
+    b = PacienteSistema("HERNAN DARIO PALACIOS", "6PISO-601", "Hospitalización", documento="1099999999")
+    assert buscar_paciente("HERNAN PALACIOS", "1020304057", [b, a]) is a                # el documento manda
+    assert buscar_paciente("HERNAN PALACIOS", "", [b, a]) is b                          # sin documento, por nombre
+    assert buscar_paciente("HERNAN PALACIOS", "1020300000", [b, a]) is None             # otro documento: otra persona
+
+
+def test_habitacion_corta_del_kardex_no_genera_revisar():
+    p = PacienteSistema("PEREZ GOMEZ JUAN", "6PISO-607", "Hospitalización", encontrado_detalle=True)
+    assert not _por_tipo(comparar([p], [_fila(hab="607")]), "REVISAR")
+    assert not _por_tipo(comparar([p], [_fila(hab="PASILLO")]), "REVISAR")
+    (r,) = _por_tipo(comparar([p], [_fila(hab="608")]), "REVISAR")
+    assert (r.campo, r.actual, r.nuevo) == ("HABITACIÓN", "608", "6PISO-607")
+
+
+def test_modo_preferido():
+    from comparar import modo_preferido
+    assert modo_preferido("URGENCIAS ( 5 PACIENTES)") == "Urgencias" and modo_preferido("PISO 3") == "Hospitalización"
