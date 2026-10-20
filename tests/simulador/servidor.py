@@ -16,6 +16,11 @@
   * /HistoriaClinica.aspx: grilla de formatos; «Ver» llena los textareas tras un pequeño retardo.
   * /kardex: kardex exportado (HTML de Google Docs, simplificado).
 La sesión puede «vencer» tras N peticiones protegidas.
+Variantes (parámetros de Simulador): login_realista (usuario con texto guía, contraseña type=text que pasa a password
+al enfocar, botón input[type=image] src=/img/entrar.png sin alt ni value, URL de login SIN la palabra «login»),
+iframe (menú y contenido dentro de un iframe del Dashboard), sin_titulo (grilla sin el título «Pacientes Por
+Atender» y con otro id: solo encabezados), icono_en_cabecera (texto de la cabecera en un span con un <img> al lado) y
+agenda_redirige (url_agenda redirige al Dashboard aunque haya sesión).
 """
 import base64
 import html
@@ -175,9 +180,20 @@ _LOGO = ('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><rect 
 IMG_LOGO = "data:image/svg+xml;base64," + base64.b64encode(_LOGO.encode()).decode()
 
 
-def pagina_login(error="", usuario="", clave="", boton="image"):
+def pagina_login(error="", usuario="", clave="", boton="image", accion="/Login.aspx", realista=False):
     """Si hay error, repite lo escrito (la clave también: un sistema descuidado haría eso). El texto guía «Usuario»
     es un watermark: está en el value y desaparece al enfocar. El botón ENTRAR es una imagen sin texto."""
+    if realista:
+        return ("""<!doctype html><html><head><meta charset="utf-8"><title>eHC</title></head><body>
+<div><img alt="eHC" src="%s" width="120" height="60"></div>%s
+<form id="form1" method="post" action="%s"><div style="margin-left:300px">
+<input name="txtUsuario" id="txtUsuario" type="text" value="%s" onfocus="if(this.value==='Usuario')this.value=''" onblur="if(!this.value)this.value='Usuario'"><br>
+<input name="txtClave" id="txtClave" type="text" value="" onfocus="this.type='password'" onblur="if(!this.value)this.type='text'"><br>
+<input type="image" name="ctl00$b1" src="/img/entrar.png" width="90" height="30">
+</div></form>
+<p>Software Asistencial eHC - Desarrollado por el Departamento de Sistemas Clínica Reina Catalina</p></body></html>"""
+                % (IMG_LOGO, f'<p class="err">{html.escape(error)}</p>' if error else "", accion,
+                   html.escape(usuario or "Usuario", quote=True)))
     if boton == "enlace":
         btn = (f'<a id="lnkAcceso" href="javascript:void(0)" onclick="document.getElementById(\'form1\').submit();return false;">'
                f'<img src="{IMG_BOTON}" width="90" height="30" alt=""></a>')
@@ -187,12 +203,12 @@ def pagina_login(error="", usuario="", clave="", boton="image"):
         btn = f'<input type="image" name="ctl00$btnAcceso" id="ctl00_btnAcceso" src="{IMG_BOTON}" width="90" height="30" alt="">'
     return ("""<!doctype html><html><head><meta charset="utf-8"><title>eHC</title></head><body>
 <div><img alt="eHC" src="%s" width="120" height="60"></div>%s
-<form id="form1" method="post" action="/Login.aspx"><div style="margin-left:300px">
+<form id="form1" method="post" action="%s"><div style="margin-left:300px">
 <input name="txtUsuario" id="txtUsuario" type="text" value="%s" onfocus="if(this.value==='Usuario')this.value=''" onblur="if(!this.value)this.value='Usuario'">
 <input name="txtClave" id="txtClave" type="password" value="%s" onkeydown="if(event.key==='Enter'){document.getElementById('form1').submit();}">
 %s</div></form>
 <p>Software Asistencial eHC - Desarrollado por el Departamento de Sistemas Clínica Reina Catalina</p></body></html>"""
-            % (IMG_LOGO, f'<p class="err">{html.escape(error)}</p>' if error else "",
+            % (IMG_LOGO, f'<p class="err">{html.escape(error)}</p>' if error else "", accion,
                html.escape(usuario or "Usuario", quote=True), html.escape(clave, quote=True), btn))
 
 
@@ -207,18 +223,25 @@ _CABECERAS = [("Menu Principal", [("Inicio", "/Dashboard.aspx"), ("Atencion de P
               ("Ayuda", [("Manual", "/Otro.aspx")])]
 
 
-def pagina_dashboard(desplegado=False, con_atencion=True):
+def pagina_dashboard(desplegado=False, con_atencion=True, icono=False, marco=False, interior=False):
     """Acordeón: pulsar una cabecera despliega su panel (y pliega el resto); pulsarla otra vez la pliega."""
+    if marco:       # Dashboard con el menú y el contenido dentro de un iframe
+        return ("""<!doctype html><html><head><meta charset="utf-8"><title>DashBoard</title></head><body>
+<div style="text-align:right">MEDICO PRUEBA(<a href="/Login.aspx?salir=1">Salir</a>)</div>
+<h2>DashBoard del Usuario</h2>
+<iframe id="contenido" name="contenido" src="/MenuFrame.aspx" style="width:1200px;height:900px;border:0"></iframe>
+</body></html>""")
     partes = ["""<!doctype html><html><head><meta charset="utf-8"><title>DashBoard</title><style>
 .hdr{background:#124;color:#fff;padding:6px;cursor:pointer;width:200px}.pnl{max-height:0;overflow:hidden;transition:max-height .2s;width:200px;background:#eef}
 .pnl.abierto{max-height:200px}.pnl a{display:block;padding:4px}</style></head><body>
-<div style="text-align:right">MEDICO PRUEBA(<a href="/Login.aspx?salir=1">Salir</a>)</div>
-<h2>DashBoard del Usuario</h2><div id="menu">"""]
+""" + ("" if interior else """<div style="text-align:right">MEDICO PRUEBA(<a href="/Login.aspx?salir=1">Salir</a>)</div>
+<h2>DashBoard del Usuario</h2>""") + """<div id="menu">"""]
     for i, (cab, items) in enumerate(_CABECERAS):
         abierto = " abierto" if desplegado and i == 0 else ""
         enl = "".join(f'<a href="{u}">{html.escape(t)}</a>' for t, u in items
                       if con_atencion or t != "Atencion de Pacientes")
-        partes.append(f'<div class="hdr" data-i="{i}"><span class="ico">»</span> <span>{html.escape(cab)}</span></div>'
+        ico = (f'<img src="{IMG_BOTON}" width="16" height="16" alt="">' if icono else '<span class="ico">»</span>')
+        partes.append(f'<div class="hdr" data-i="{i}">{"<span>" + html.escape(cab) + "</span> " + ico if icono else ico + " <span>" + html.escape(cab) + "</span>"}</div>'
                       f'<div class="pnl{abierto}" id="pnl{i}">{enl}</div>')
     partes.append("""</div><script>
 document.querySelectorAll('.hdr').forEach(function (h) {
@@ -237,7 +260,8 @@ def pagina_agenda(datos, cfg):
     cfg = dict(cfg, campos=campos)
 
     def tabla(gid, titulo):
-        return (f'<table id="{gid}" border="1"><tr><td id="{gid}_title" colspan="7" class="dxgvTitlePanel">{titulo}</td></tr>'
+        tit = "" if cfg.get("sin_titulo") else f'<tr><td id="{gid}_title" colspan="7" class="dxgvTitlePanel">{titulo}</td></tr>'
+        return (f'<table id="{gid}" border="1">{tit}'
                 f'<tr id="{gid}_DXHeadRow"><td>Paciente</td><td>Identificacion</td><td>Admision</td><td>Convenio</td>'
                 f'<td>Habitacion</td><td>Estado</td><td>Acción</td></tr>'
                 f'<tr id="{gid}_DXFilterRow">' + "".join('<td><input type="text" class="flt"></td>' for _ in range(6))
@@ -481,7 +505,8 @@ class Simulador:
     def __init__(self, agenda_rota_en=(), exige_login=True, agenda_requiere_menu=True, vence_tras=None,
                  boton_login="image", menu_desplegado=False, con_atendidos=False, tam_atendidos=2, id_pend=None,
                  filtro_contiene=False, campos_legibles=False, autofilter_roto=False, pag_cliente=True,
-                 con_atencion_en_menu=True):
+                 con_atencion_en_menu=True, login_realista=False, iframe=False, sin_titulo=False,
+                 icono_en_cabecera=False, agenda_redirige=False):
         self.exige_login = exige_login
         self.agenda_requiere_menu = agenda_requiere_menu
         self.vence_tras = vence_tras
@@ -489,7 +514,15 @@ class Simulador:
         self.boton_login = boton_login
         self.menu_desplegado = menu_desplegado
         self.con_atencion_en_menu = con_atencion_en_menu
-        self.cfg = {"id_pend": id_pend or GRID_PEND, "id_aten": GRID_ATEN, "con_atendidos": con_atendidos,
+        self.login_realista = login_realista
+        self.ruta_login = "/ehc2013/Default.aspx" if login_realista else "/Login.aspx"     # sin «login» en la URL
+        self.iframe = iframe
+        self.icono_en_cabecera = icono_en_cabecera
+        self.agenda_redirige = agenda_redirige
+        self.visitas_url_agenda = 0         # peticiones a /Agenda.aspx (la url_agenda configurada)
+        if sin_titulo and not id_pend:
+            id_pend = "ctl00_cph1_ASPxPageControl1_gvOtraTabla"
+        self.cfg = {"sin_titulo": sin_titulo, "id_pend": id_pend or GRID_PEND, "id_aten": GRID_ATEN, "con_atendidos": con_atendidos,
                     "tam_pend": 10, "tam_aten": tam_atendidos, "contiene": filtro_contiene,
                     "campos_legibles": campos_legibles, "autofilter_roto": autofilter_roto, "pag_cliente": pag_cliente}
         self.visitas_agenda = 0
@@ -514,6 +547,10 @@ class Simulador:
     @property
     def url_agenda(self):
         return f"{self.base}/Agenda.aspx"
+
+    @property
+    def url_login(self):
+        return f"{self.base}{self.ruta_login}"
 
     @property
     def url_kardex(self):
@@ -555,7 +592,7 @@ class Simulador:
                 u = urlparse(self.path)
                 n = int(self.headers.get("Content-Length") or 0)
                 campos = parse_qs(self.rfile.read(n).decode("utf-8"))
-                if u.path.lower() != "/login.aspx":
+                if u.path.lower() not in ("/login.aspx", sim.ruta_login.lower()):
                     return self._html("no existe", 404)
                 usuario, clave = campos.get("txtUsuario", [""])[0], campos.get("txtClave", [""])[0]
                 if usuario == USUARIO and clave == CLAVE:
@@ -564,30 +601,45 @@ class Simulador:
                     sim.sesiones[sid] = {"menu": False}
                     # cookie de sesión: sin Expires ni Max-Age (se pierde al cerrar el navegador)
                     return self._redirigir("/Dashboard.aspx", [("Set-Cookie", f"sid={sid}; Path=/; HttpOnly")])
-                self._html(pagina_login("Usuario o contraseña incorrectos", usuario, clave, sim.boton_login))
+                self._html(pagina_login("Usuario o contraseña incorrectos", usuario, clave, sim.boton_login,
+                                        sim.ruta_login, sim.login_realista))
 
             def do_GET(self):
                 u = urlparse(self.path)
                 ruta = u.path.lower()
-                if ruta == "/login.aspx":
-                    return self._html(pagina_login(boton=sim.boton_login))
+                if ruta in ("/login.aspx", sim.ruta_login.lower()):
+                    return self._html(pagina_login(boton=sim.boton_login, accion=sim.ruta_login, realista=sim.login_realista))
+                if ruta == "/img/entrar.png":
+                    b = _SVG.encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/svg+xml")
+                    self.send_header("Content-Length", str(len(b)))
+                    self.end_headers()
+                    return self.wfile.write(b)
                 if ruta == "/_act":
                     q = parse_qs(u.query)
                     sim.actualizaciones.append((q.get("m", [""])[0], q.get("r", ["1"])[0] == "1"))
                     return self._html("ok")
                 if ruta == "/kardex":
                     return self._html(pagina_kardex()) if sim.kardex_sirve else self._html("no", 404)
-                if ruta in ("/dashboard.aspx", "/atencionpacientes.aspx", "/agenda.aspx", "/historiaclinica.aspx", "/otro.aspx"):
+                if ruta in ("/dashboard.aspx", "/atencionpacientes.aspx", "/agenda.aspx", "/historiaclinica.aspx", "/otro.aspx", "/menuframe.aspx"):
                     sim.protegidas += 1
+                    if ruta == "/agenda.aspx":
+                        sim.visitas_url_agenda += 1
                     if sim.vence_tras and sim.protegidas == sim.vence_tras:
                         sim.sesiones.clear()                  # la sesión vence a mitad del análisis
                     ses = self._sesion()
                     if sim.exige_login and ses is None:
-                        return self._redirigir("/Login.aspx?ReturnUrl=" + u.path)
+                        return self._redirigir(sim.ruta_login + "?ReturnUrl=" + u.path)
                     ses = ses if ses is not None else {"menu": True}
-                    dash = pagina_dashboard(sim.menu_desplegado, sim.con_atencion_en_menu)
+                    dash = pagina_dashboard(sim.menu_desplegado, sim.con_atencion_en_menu, sim.icono_en_cabecera, sim.iframe)
+                    if ruta == "/menuframe.aspx":
+                        return self._html(pagina_dashboard(sim.menu_desplegado, sim.con_atencion_en_menu,
+                                                           sim.icono_en_cabecera, False, True))
                     if ruta in ("/dashboard.aspx", "/otro.aspx"):
                         return self._html(dash)
+                    if ruta == "/agenda.aspx" and sim.agenda_redirige:
+                        return self._redirigir("/Dashboard.aspx")
                     if ruta in ("/atencionpacientes.aspx", "/agenda.aspx"):
                         if ruta == "/atencionpacientes.aspx":
                             ses["menu"] = True

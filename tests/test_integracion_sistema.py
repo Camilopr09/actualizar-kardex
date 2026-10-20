@@ -253,8 +253,8 @@ def test_kardex_inaccesible_produce_error_kardex():
 
 def test_fallo_de_agenda_en_un_paciente_no_aborta_el_analisis():
     # visita 1: entrada; 2: búsqueda de ALVARADO (el primero del kardex); 3 y 4: su historia (la 4.ª es el
-    # intento de recuperación de ir_agenda: también rota para que el paciente falle)
-    with Simulador(agenda_rota_en=[3, 4]) as sim:
+    # intento de recuperación de ir_agenda y la 5.ª su último recurso (la URL aprendida): también rotas para que falle)
+    with Simulador(agenda_rota_en=[3, 4, 5]) as sim:
         (pacientes, _, acciones), registro, avance = _analizar(sim)
     por = {p.nombre: p for p in pacientes}
     assert "No pude leer su historia" in por["PEDRO PABLO ALVARADO RUIZ"].aviso
@@ -343,6 +343,103 @@ def test_acordeon_y_grilla_por_id_o_por_titulo(sis, desplegado, id_pend):
         assert s.grid_pend == (id_pend or GRID_PEND)
         assert "Atencion De Pacientes" in s.page.inner_text("body")
         assert s._filas(s.grid_pend)
+
+
+@pytest.mark.parametrize("variante", [
+    {"iframe": True}, {"sin_titulo": True}, {"icono_en_cabecera": True}, {"agenda_redirige": True},
+    {"iframe": True, "sin_titulo": True, "icono_en_cabecera": True, "menu_desplegado": True}])
+def test_variantes_de_la_navegacion_hasta_la_grilla(sis, variante):
+    with Simulador(**variante) as sim:
+        s = sis(sim)
+        s.ir_agenda()
+        assert sim.logins == 1                                     # tras entrar no se vuelve a llenar el login
+        assert s.grid_pend == (sim.cfg["id_pend"])
+        assert (s._fr() is not s.page.main_frame) == bool(variante.get("iframe"))
+        assert s._filas(s.grid_pend)
+        # segunda vez: por la URL aprendida, sin volver a iniciar sesión ni pasar por el menú
+        s.ir_agenda()
+        assert sim.logins == 1 and s._filas(s.grid_pend)
+        if variante.get("agenda_redirige"):
+            assert sim.visitas_url_agenda == 1                     # url_agenda no se vuelve a pedir en bucle
+        # filtros, lectura de filas y «Atender» usan el frame de la grilla
+        p = s.buscar("HERNAN PALACIOS", "1020304057", "CC", ["Hospitalización", "Urgencias"])
+        assert p and p.nombre == "JAIRO ANDRES MONTENEGRO VEGA"
+        assert s._atender(p)
+        ev = s._ultimo_formato("HOJA DE EVOLUCION", ["DAZA"], estructurado=True)
+        assert ev and ev["formato"]["DIAGNOSTICO"]["DX"].startswith("EVOLUCION UCI")
+        s._recargar()
+        s._fr().wait_for_selector("#ctl00_cph1_ASPxRoundPanel2_grdFormatos")
+        assert s._ultimo_formato("HOJA DE EVOLUCION", ["DAZA"]) is not None
+
+
+def test_login_realista_sin_password_ni_login_en_la_url(sis):
+    # usuario con texto guía, contraseña type=text que pasa a password al enfocar, botón input[type=image] src=/img/entrar.png
+    with Simulador(login_realista=True) as sim:
+        s = sis(sim)
+        s.page.goto(sim.url_agenda)
+        assert "login" not in s.page.url.lower() and sim.ruta_login in s.page.url
+        assert sistema.pagina_pide_login(s.page)
+        s.ir_agenda()
+        assert sim.logins == 1 and s._filas(s.grid_pend)
+        assert not sistema.pagina_pide_login(s.page)
+        assert "(Salir)" in s.page.inner_text("body") or s.grid_pend
+
+
+def test_login_realista_con_clave_mala_da_error_de_sesion(sis):
+    with Simulador(login_realista=True) as sim:
+        s = sis(sim)
+        s.cred = {"usuario": USUARIO, "clave": "mala"}
+        with pytest.raises(ErrorApp) as e:
+            s.ir_agenda()
+    assert e.value.codigo == "sesion" and e.value.mensaje.startswith(s.MSG_LOGIN_MALO)
+
+
+def test_login_realista_sin_credenciales_espera_a_la_persona(sis):
+    with Simulador(login_realista=True) as sim:
+        s = sis(sim, credenciales=False)
+        s.ESPERA_PERSONA = 2
+        with pytest.raises(ErrorApp) as e:
+            s.ir_agenda()                  # detecta el login y espera (se agotan los 2 s)
+    assert e.value.codigo == "sesion" and "agotaron" in e.value.mensaje
+
+
+def test_falta_menu_principal_dice_el_paso_que_fallo(sis):
+    with Simulador() as sim:
+        s = sis(sim)
+        s.asegurar_sesion()
+        s._clic_texto = lambda *a, **k: False
+        assert not s._por_el_menu()
+        assert s._paso == 'No encontré "Menu Principal"'
+
+
+def test_menu_sin_atencion_de_pacientes_dice_el_paso_que_fallo(sis):
+    with Simulador(con_atencion_en_menu=False) as sim:
+        s = sis(sim)
+        with pytest.raises(ErrorApp) as e:
+            s.ir_agenda()
+        assert e.value.codigo == "agenda"
+        assert e.value.mensaje.startswith('Pulsé "Menu Principal" pero no apareció "Atencion de Pacientes"')
+        assert "(página: DashBoard — /Dashboard.aspx)" in e.value.mensaje
+
+
+def test_mensaje_sin_menu_principal_en_ir_agenda(sis):
+    with Simulador() as sim:
+        s = sis(sim)
+        s._clic_texto = lambda *a, **k: False          # como si la cabecera no existiera
+        with pytest.raises(ErrorApp) as e:
+            s.ir_agenda()
+        assert e.value.mensaje == 'No encontré "Menu Principal" (página: DashBoard — /Dashboard.aspx)'
+        assert any(a.suffix == ".png" for a in (s.diag).glob("*"))
+
+
+def test_el_dashboard_no_se_confunde_con_un_login(pagina):
+    pie = "<p>Software Asistencial eHC - Desarrollado por el Departamento de Sistemas</p>"
+    pagina.set_content(f'<div>NOMBRE(<a href="#">Salir</a>)</div><input type="text"><input type="text">'
+                       f'<input type="image" src="data:,x" width="20" height="20">{pie}')
+    assert not sistema.pagina_pide_login(pagina)
+    # login sin password real ni botón con texto: dos campos y el pie bastan
+    pagina.set_content(f'<input type="text" value="Usuario"><input type="text">{pie}')
+    assert sistema.pagina_pide_login(pagina)
 
 
 def test_actualizar_es_necesario_para_que_la_grilla_cambie(pagina):
