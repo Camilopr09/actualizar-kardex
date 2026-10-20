@@ -62,13 +62,28 @@ def test_analizar_contra_el_simulador():
     assert a.dx == "1. COLECISTITIS AGUDA\n2. HTA"
     assert a.medico == "DAZA PEREZ JUAN" and a.fecha == "19/10/2026 06:30"
     assert a.evolucion == ("19/10/2026 - DR. DAZA PEREZ JUAN (MEDICINA INTERNA)\n"
-                           "EXAMEN FISICO: ALERTA, SIN DOLOR ANALISIS: EVOLUCION FAVORABLE")
+                           "EVOLUCION FAVORABLE")       # texto de la pestaña ANALISIS (sin el «-MEDICINA INTERNA-»)
     assert "NO DEBE LEERSE" not in a.tratamiento and "OTRO DX" not in a.dx
     assert a.tratamiento == "PLAN\n1. DIETA LIQUIDA\n2. CEFAZOLINA 1 G IV C/8H\n3. OMEPRAZOL 40 MG IV C/24H"
     for campo in ("DX", "EVOLUCIÓN", "TRATAMIENTO"):
         act = _acc(acciones, "PEDRO ALVARADO", "ACTUALIZAR", campo)
         assert len(act) == 1 and act[0].automatica and act[0].nuevo == {
             "DX": "DX:\n" + a.dx, "EVOLUCIÓN": a.evolucion, "TRATAMIENTO": a.tratamiento}[campo]
+
+    # ---- DX/EVOLUCIÓN/PLAN leídos por pestañas (clic en cada una; solo una es visible a la vez)
+    # ESCOBAR: ANALISIS vacío -> SINTOMAS DESCRITOS + EXAMEN FISICO; DX tipo (a) con 3 ítems
+    assert esc.dx == "1. PANCREATITIS AGUDA\n2. COLELITIASIS\n3. DM2"
+    assert esc.evolucion == "19/10/2026 - DR. DAZA PEREZ JUAN\nDOLOR ABDOMINAL ABDOMEN BLANDO"
+    assert esc.tratamiento == "PLAN\n1. NVO"
+    # MONTENEGRO: DX tipo (b): el renglón «DIAGNÓSTICO» es el encabezado; lo anterior (evolución) se descarta
+    assert por["JAIRO ANDRES MONTENEGRO VEGA"].dx.splitlines() == [
+        "- SINDROME COLEDOCIANO /COLESTASIS SEVERA",
+        "- POST DE DRENAJE BILIAR INTERNO - EXTERNO + DILATACIÓN PERCUTÁNEA DE LA AMPOLLA Y DEL CONDUCTO BILIAR (13/10/26)",
+        "- FALLA RENAL CRONICA AGUDIZADA"]
+    assert por["JAIRO ANDRES MONTENEGRO VEGA"].tratamiento == "PLAN\n1. DIETA NORMAL\n2. CEFTRIAXONA 2 G IV C/24H"
+    # GUTIERREZ: «IDX:» y luego la sección «EVOLUCION:» dentro del mismo textarea -> solo el diagnóstico
+    assert por["LAURA GUTIERREZ OSORIO"].dx == "1. APENDICITIS AGUDA COMPLICADA"
+    assert por["LAURA GUTIERREZ OSORIO"].evolucion == "19/10/2026 - DR. FABIAN GOMEZ LUIS (MEDICINA INTERNA)\nEVOLUCION FAVORABLE"
 
     # ---- BENAVIDES: IGUAL MANEJO conserva el tratamiento del kardex y suma lo nuevo de las órdenes
     b = por["SOFIA BENAVIDES LUNA"]
@@ -371,6 +386,30 @@ def test_lectura_completa_recorre_todas_las_paginas(sis, pag_cliente):
         filas = s._leer_todo(s.grid_pend)
         assert len(filas) > 10 and {f["pagina"] for f in filas} >= {0, 1}
         assert len({(f["nombre"], f["numero"]) for f in filas}) == len(filas)        # sin repetidos
+
+
+def test_leer_formato_por_pestanas_y_orden_sin_pestanas(sis):
+    with Simulador() as sim:
+        s = sis(sim)
+        p = s.buscar("PEDRO ALVARADO", "1020304051", "CC", ["Hospitalización"])
+        assert s._atender(p)
+        ev = s._ultimo_formato("HOJA DE EVOLUCION", ["DAZA"], estructurado=True)
+        f = ev["formato"]
+        assert list(f) == ["DIAGNOSTICO", "UNIDAD EN DONDE SE ENCUENTRA EL PACIENTE", "HIPOTESIS DIAGNOSTICA",
+                           "SINTOMAS DESCRITOS", "EXAMEN FISICO", "ANALISIS", "PLAN", "SOLICITUD MATERIAL ESPECIAL"]
+        d = f["DIAGNOSTICO"]       # textarea deshabilitada + combos; etiqueta = celda anterior de la fila
+        assert d["DX"] == "1. COLECISTITIS AGUDA\n2. HTA" and d["SOSPECHA DENGUE"] == "NO"
+        assert d["RIESGO DE VENTILACION"] == "NO APLICA" and d["PACIENTE CON SINTOMAS RESPIRATORIOS"] == "NO"
+        assert f["ANALISIS"]["_texto"] == "-MEDICINA INTERNA-\nEVOLUCION FAVORABLE"
+        assert f["PLAN"]["PLAN"].startswith("1. DIETA LIQUIDA") and f["HIPOTESIS DIAGNOSTICA"]["_texto"] == ""
+        assert f["SOLICITUD MATERIAL ESPECIAL"] == {"_texto": ""}               # pestaña sin controles
+        # el panel es el de la fila elegida (su título lleva el N° del formato)
+        assert s._titulo_detalle() == ("22807102", "HOJA DE EVOLUCION MEDICO ESPECIALISTA")
+        # las órdenes no tienen pestañas: texto completo
+        s.page.reload(wait_until="domcontentloaded")
+        od = s._ultimo_formato("ORDEN M")
+        assert od["formato"] is None and "CEFAZOLINA 1G" in od["texto"]
+        assert s._leer_formato()["FORMATO"]["_texto"] == od["texto"]
 
 
 @pytest.fixture

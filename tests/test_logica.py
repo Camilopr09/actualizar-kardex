@@ -1,6 +1,6 @@
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from notas import interpretar_evolucion, interpretar_ordenes, construir_tratamiento, es_igual_manejo
+from notas import extraer_dx, interpretar_evolucion, interpretar_ordenes, construir_tratamiento, es_igual_manejo
 from comparar import PacienteSistema, comparar, emparejar
 from kardex_doc import parsear_kardex_html
 
@@ -49,3 +49,45 @@ def test_html_y_comparar():
     tipos = [(a.tipo, a.campo) for a in acc]
     assert ("ACTUALIZAR", "DX") in tipos and ("REVISAR", "HABITACIÓN") in tipos
     assert any(a.tipo == "AGREGAR" for a in acc) and any(a.tipo == "RETIRAR" for a in acc)
+
+
+DX_B = ("EVOLUCION UCI/ AM\n\n- SHOCK DISTRIBUTIVO/ HIPOVOLÉMICO\nEN VMI\n- SEPSIS FOCO BILIAR\n"
+        "- INJURIA REAN AGUDA EN TERAPIA DE HEMODIAFILTRACION (INICIO 18/10/26)\n- TUMOR DE AMPOLLA DE VATTER CON\n"
+        "MTS HEPATICA DE RECIENTE\nDIAGNÓSTICO\n- SINDROME COLEDOCIANO\n/COLESTASIS SEVERA\n"
+        "- POST DE DRENAJE BILIAR INTERNO -\nEXTERNO + DILATACIÓN PERCUTÁNEA\nDE LA AMPOLLA Y DEL CONDUCTO\n"
+        "BILIAR (13/10/26)\n- FALLA RENAL CRONICA AGUDIZADA")
+
+
+def test_extraer_dx_sin_titulos_y_vacio():
+    assert extraer_dx("1. colecistopatia a descartar\n2. NEFROLITIASIS IZQUIERDA\n3. COLITIS") == (
+        "1. COLECISTOPATIA A DESCARTAR\n2. NEFROLITIASIS IZQUIERDA\n3. COLITIS")
+    assert extraer_dx("HTA\n\nDM2\n") == "HTA\nDM2"            # sin marcadores: un renglón por diagnóstico
+    assert extraer_dx("") == "" and extraer_dx(None) == "" and extraer_dx("  \n \n") == ""
+
+
+def test_extraer_dx_caso_b_solo_despues_del_encabezado():
+    assert extraer_dx(DX_B).splitlines() == [
+        "- SINDROME COLEDOCIANO /COLESTASIS SEVERA",
+        "- POST DE DRENAJE BILIAR INTERNO - EXTERNO + DILATACIÓN PERCUTÁNEA DE LA AMPOLLA Y DEL CONDUCTO BILIAR (13/10/26)",
+        "- FALLA RENAL CRONICA AGUDIZADA"]
+
+
+def test_extraer_dx_titulo_de_otra_cosa_sin_encabezado():
+    assert extraer_dx("NOTA MEDICA\n1. HTA\n2. DM2") == "1. HTA\n2. DM2"
+    assert extraer_dx("RONDA AM\n- A\n- B\nPLAN: X") == "- A\n- B"      # sección de otro tipo al final se quita
+    assert extraer_dx("EVOLUCION UCI/ AM\n\n- A\nEN VMI\n- B") == "- A EN VMI\n- B"
+
+
+def test_extraer_dx_encabezado_toma_solo_su_seccion():
+    assert extraer_dx("IDX:\n1. HTA\n2. DM2\nEVOLUCION:\nPACIENTE BIEN\nPLAN: X") == "1. HTA\n2. DM2"
+    assert extraer_dx("IDX: 1. HTA 2. DM2\nEVOLUCION: BIEN") == "1. HTA\n2. DM2"
+    assert extraer_dx("DX: 1. HTA\nANALISIS: X") == "1. HTA"                  # «DX: …» en la misma línea
+    assert extraer_dx("EVOLUCION: BIEN\nDIAGNOSTICOS\n- A\n- B\nPLAN\n- C") == "- A\n- B"
+    assert extraer_dx("S: DOLOR\n\nDIAGNÓSTICO:\n1. A\nEXAMEN FISICO: x") == "1. A"
+    assert extraer_dx("DX:") == ""
+
+
+def test_extraer_dx_encabezado_siempre_es_encabezado_y_gana_el_ultimo():
+    assert extraer_dx("- TUMOR DE RECIENTE\nDIAGNOSTICO\n- FALLA") == "- FALLA"
+    assert extraer_dx("DX: 1. A\nPLAN: X\nIDX:\n1. B") == "1. B"
+    assert extraer_dx("impresion diagnostica\n- A") == "- A"

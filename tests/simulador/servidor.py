@@ -74,19 +74,25 @@ EVOL = "HOJA DE EVOLUCION"
 ORDEN = "ORDEN MEDICA"
 
 
-def _nota(dx, plan):
-    return (f"-MEDICINA INTERNA-\nPTE CON DX: {dx}\nEXAMEN FISICO: ALERTA, SIN DOLOR\n"
-            f"ANALISIS: EVOLUCION FAVORABLE\nPLAN {plan}")
+def _nota(dx, plan, analisis="-MEDICINA INTERNA-\nEVOLUCION FAVORABLE", sintomas="", examen="ALERTA, SIN DOLOR"):
+    """Hoja de evolución estructurada: el texto de cada pestaña del «Detalle del Formato»."""
+    return {"dx": dx, "plan": plan, "analisis": analisis, "sintomas": sintomas, "examen": examen}
 
 
-# id paciente -> lista de formatos (formato, fecha hora, estado, usuario, detalle)
+# DX tipo (b): evolución primero y, tras el renglón «DIAGNÓSTICO», los diagnósticos partidos en varios renglones
+DX_UCI = ("EVOLUCION UCI/ AM\n\n- SHOCK DISTRIBUTIVO/ HIPOVOLÉMICO\nEN VMI\n- SEPSIS FOCO BILIAR\n"
+          "- INSUFICIENCIA HEPATICA GRAVE/\nCHILD-PUGH C\n- TUMOR DE AMPOLLA DE VATTER CON\nMTS HEPATICA DE RECIENTE\n"
+          "DIAGNÓSTICO\n- SINDROME COLEDOCIANO\n/COLESTASIS SEVERA\n- POST DE DRENAJE BILIAR INTERNO -\n"
+          "EXTERNO + DILATACIÓN PERCUTÁNEA\nDE LA AMPOLLA Y DEL CONDUCTO\nBILIAR (13/10/26)\n- FALLA RENAL CRONICA AGUDIZADA")
+
+# id paciente -> lista de formatos (formato, fecha hora, estado, usuario, detalle: dict de pestañas o texto de la orden)
 FORMATOS = {
     1: [(EVOL, "18/10/2026 07:00", "Finalizado", "DAZA PEREZ JUAN",
          _nota("1. COLECISTITIS AGUDA", "1. NVO 2. CEFAZOLINA 1 G IV C/8H")),
         (EVOL, "19/10/2026 09:10", "Finalizado", "LOPEZ RUIZ ANA (ENFERMERIA)",
          _nota("1. OTRO DX NO ESPECIALISTA", "1. NO DEBE LEERSE")),
         (EVOL, "19/10/2026 06:30", "Finalizado", "DAZA PEREZ JUAN",
-         _nota("1. COLECISTITIS AGUDA 2. HTA", "1. DIETA LIQUIDA 2. CEFAZOLINA 1 G IV C/8H 3. OMEPRAZOL 40 MG IV C/24H")),
+         _nota("1. COLECISTITIS AGUDA\n2. HTA", "1. DIETA LIQUIDA 2. CEFAZOLINA 1 G IV C/8H 3. OMEPRAZOL 40 MG IV C/24H")),
         (ORDEN, "19/10/2026 06:35", "Finalizado", "DAZA PEREZ JUAN",
          "DIETA LIQUIDA\nFórmula #1\n1) CEFAZOLINA 1G Cantidad: 3 Dosis: 1 g IV c/8h\n")],
     2: [(EVOL, "19/10/2026 07:20", "Finalizado", "FABIAN GOMEZ LUIS",
@@ -97,11 +103,13 @@ FORMATOS = {
          _nota("PIELONEFRITIS AGUDA", "1. DIETA BLANDA 2. CIPROFLOXACINO 400 MG IV C/12H"))],
     4: [(EVOL, "19/10/2026 05:40", "Finalizado", "TORRES NIETO ROSA (AUXILIAR)",
          _nota("1. CELULITIS DE MIEMBRO INFERIOR", "1. DIETA NORMAL"))],
-    5: [(EVOL, "19/10/2026 06:50", "Finalizado", "DAZA PEREZ JUAN", _nota("1. PANCREATITIS AGUDA", "1. NVO"))],
-    7: [(EVOL, "19/10/2026 07:45", "Finalizado", "DAZA PEREZ JUAN",
-         _nota("1. SEPSIS DE ORIGEN URINARIO", "1. DIETA NORMAL 2. CEFTRIAXONA 2 G IV C/24H"))],
+    5: [(EVOL, "19/10/2026 06:50", "Finalizado", "DAZA PEREZ JUAN",
+         _nota("1. PANCREATITIS AGUDA\n2. COLELITIASIS\n3. DM2", "1. NVO",
+               analisis="", sintomas="DOLOR ABDOMINAL", examen="ABDOMEN BLANDO"))],      # ANALISIS vacío
+    7: [(EVOL, "19/10/2026 07:45", "Finalizado", "DAZA PEREZ JUAN", _nota(DX_UCI, "1. DIETA NORMAL 2. CEFTRIAXONA 2 G IV C/24H"))],
     6: [(EVOL, "19/10/2026 08:30", "Finalizado", "FABIAN GOMEZ LUIS",
-         _nota("1. APENDICITIS AGUDA COMPLICADA", "1. DIETA LIQUIDA 2. CEFAZOLINA 1 G IV C/8H"))],
+         _nota("IDX:\n1. APENDICITIS AGUDA COMPLICADA\nEVOLUCION:\nPACIENTE CON DOLOR, SIN FIEBRE",
+               "1. DIETA LIQUIDA 2. CEFAZOLINA 1 G IV C/8H"))],
 }
 
 
@@ -118,7 +126,7 @@ KARDEX = [
     ]),
     ("URGENCIAS", [
         ("TOMAS CORREA MEJIA", "CUB 12", "PIELONEFRITIS AGUDA",
-         "19/10/2026 - DR. EMILIANI RUEDA CARLOS (MEDICINA INTERNA)\nEXAMEN FISICO: ALERTA, SIN DOLOR ANALISIS: EVOLUCION FAVORABLE",
+         "19/10/2026 - DR. EMILIANI RUEDA CARLOS (MEDICINA INTERNA)\nEVOLUCION FAVORABLE",
          "1. DIETA BLANDA 2. CIPROFLOXACINO 400 MG IV C/12H", "CC", "1020304053"),   # igual al sistema: sin acciones
         ("ELSA FIGUEROA PARDO", "CUB 3", "HERNIA INGUINAL", "ev", "DIETA", "CC", "1020309999"),  # no está en el sistema
     ]),
@@ -340,20 +348,75 @@ document.getElementById("btnAct").addEventListener("click", function () {
 </script></body></html>""".replace("@@DATOS@@", json.dumps(datos)).replace("@@CFG@@", json.dumps(cfg))
 
 
+PESTANAS = ["DIAGNOSTICO:", "UNIDAD EN DONDE SE ENCUENTRA EL PACIENTE", "HIPOTESIS DIAGNOSTICA:", "SINTOMAS DESCRITOS:",
+            "-EXAMEN FISICO-", "ANALISIS:", "PLAN-", "SOLICITUD MATERIAL ESPECIAL"]
+
+
 def pagina_historia(pid):
     nombre = next(p[1] for p in PACIENTES if p[0] == pid)
-    return """<!doctype html><html><head><meta charset="utf-8"><title>Historia clínica</title></head><body>
+    formatos = [(f[0], f[1], f[2], f[3], f[4], 22807000 + pid * 100 + i) for i, f in enumerate(FORMATOS[pid])]
+    return """<!doctype html><html><head><meta charset="utf-8"><title>Historia clínica</title>
+<style>.dxtc-tab{border:1px solid #888;padding:4px 8px;cursor:pointer;width:170px}.dxtc-activeTab{background:#cde}
+.dxtc-content{border:1px solid #888;padding:6px;min-width:520px;min-height:80px}.dxeButtonEdit td{padding:0}</style></head><body>
 <h1>Historia clínica</h1><p id="quien">%(nombre)s</p>
 <div id="ctl00_cph1_ASPxRoundPanel2">
 <table id="%(grid)s"><tr id="%(grid)s_DXHeadRow"><th>N°</th><th>Formato</th><th>Fecha hora</th><th>Estado</th><th>Usuario</th><th>Ver</th></tr></table></div>
 <h3>Detalle del Formato</h3>
-<textarea id="t1" rows="6" cols="80"></textarea><textarea id="t2" rows="3" cols="80"></textarea><textarea id="t3" rows="3" cols="80"></textarea>
+<div id="detalle"></div>
 <script>%(stub)s
-var FORMATOS = %(formatos)s;      // [formato, fecha, estado, usuario, detalle]
+var FORMATOS = %(formatos)s;      // [formato, fecha, estado, usuario, detalle, n° de formato]
+var PESTANAS = %(pestanas)s;
 var COLS = ["N°", "Formato", "Fecha hora", "Estado", "Usuario", "Ver"];
 var g = crearGrilla("%(grid)s", COLS, function () {
-  return FORMATOS.map(function (f, i) { return [String(i + 1), f[0], f[1], f[2], f[3], "Ver", i]; });
+  return FORMATOS.map(function (f, i) { return [String(f[5]), f[0], f[1], f[2], f[3], "Ver", i]; });
 }, pintar);
+function esc(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"); }
+function combo(v) {
+  return '<table class="dxeButtonEdit"><tr><td><input type="text" class="dxeEditArea" readonly value="' + esc(v) +
+         '"></td><td>&#9662;</td></tr></table><input type="hidden" value="x">';
+}
+function fila(et, ctl) { return "<tr><td>" + esc(et) + "</td><td>" + ctl + "</td><td><img alt='' width='12' height='12' src='data:,'>&#128269;</td></tr>"; }
+function area(v, dis) { return '<textarea rows="4" cols="60" style="resize:both;color:gray" disabled>' + esc(v) + "</textarea>"; }
+function contenido(i, d) {      // lo que devuelve el callback de cada pestaña
+  var t = PESTANAS[i], r;
+  if (i === 0) r = fila("DX:", area(d.dx)) + fila("SOSPECHA DENGUE", combo("NO")) + fila("SOSPECHA COVID 19", combo("NO")) +
+                   fila("RIESGO DE VENTILACION", combo("NO APLICA")) + fila("¿PACIENTE CON SINTOMAS RESPIRATORIOS?", combo("NO")) +
+                   fila("VENTILACION MECANICA", combo("NO"));
+  else if (i === 1) r = fila("UNIDAD:", combo("PISO 6"));
+  else if (i === 2) r = fila("HIPOTESIS DIAGNOSTICA:", area(""));
+  else if (i === 3) r = fila("SINTOMAS DESCRITOS:", area(d.sintomas));
+  else if (i === 4) r = fila("EXAMEN FISICO:", area(d.examen));
+  else if (i === 5) r = fila("ANALISIS:", area(d.analisis));
+  else if (i === 6) r = fila("PLAN:", area(d.plan));
+  else r = "";
+  return '<fieldset><legend>' + esc(t) + '</legend><table>' + r + "</table></fieldset>";
+}
+function mostrar(f) {
+  var d = f[4], det = document.getElementById("detalle");
+  var titulo = '<div class="dxrp-header"><span>Formato: ' + f[5] + " - " + (f[0] === "ORDEN MEDICA" ? f[0] : f[0] + " MEDICO ESPECIALISTA") + "</span></div>";
+  var pie = "<p>Su nivel de permisos no le permite modificar el formato</p>";
+  if (typeof d === "string") { det.innerHTML = titulo + '<textarea id="t1" rows="6" cols="80">' + esc(d) + "</textarea>" + pie; return; }
+  var tabs = PESTANAS.map(function (n, i) {
+    return '<tr><td class="dxtc-tab' + (i ? "" : " dxtc-activeTab") + '" data-i="' + i + '"><a class="dxtc-link" href="#"><span class="dx-vam">' + esc(n) + "</span></a></td></tr>";
+  }).join("");
+  var conts = PESTANAS.map(function (n, i) {
+    return '<div class="dxtc-content" data-i="' + i + '" style="display:' + (i ? "none" : "block") + '">' + (i ? "" : contenido(0, d)) + "</div>";
+  }).join("");
+  det.innerHTML = titulo + '<table class="dxtcLeft"><tr><td valign="top"><table>' + tabs + '</table></td><td valign="top">' + conts + "</td></tr></table>" + pie;
+  var llenos = { 0: true };
+  Array.prototype.forEach.call(det.querySelectorAll(".dxtc-tab"), function (td) {
+    td.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      var i = +td.getAttribute("data-i");
+      Array.prototype.forEach.call(det.querySelectorAll(".dxtc-tab"), function (x) { x.classList.toggle("dxtc-activeTab", x === td); });
+      Array.prototype.forEach.call(det.querySelectorAll(".dxtc-content"), function (c) { c.style.display = (+c.getAttribute("data-i") === i) ? "block" : "none"; });
+      if (!llenos[i]) {          // callback: el contenido llega con retardo
+        llenos[i] = true;
+        setTimeout(function () { det.querySelector('.dxtc-content[data-i="' + i + '"]').innerHTML = contenido(i, d); }, 300);
+      }
+    });
+  });
+}
 function pintar() {
   var t = document.getElementById("%(grid)s");
   Array.prototype.slice.call(t.querySelectorAll("tr[id*=_DXDataRow]")).forEach(function (tr) { tr.remove(); });
@@ -363,17 +426,14 @@ function pintar() {
     var td = document.createElement("td"); var a = document.createElement("a"); a.href = "#"; a.textContent = "Ver";
     a.addEventListener("click", function (ev) {
       ev.preventDefault();
-      setTimeout(function () {                  // el detalle llega con un pequeño retardo
-        document.getElementById("t1").value = FORMATOS[f[6]][4];
-        document.getElementById("t2").value = ""; document.getElementById("t3").value = "";
-      }, 400);
+      setTimeout(function () { mostrar(FORMATOS[f[6]]); }, 400);      // el detalle llega con un pequeño retardo
     });
     td.appendChild(a); tr.appendChild(td); t.appendChild(tr);
   });
 }
 pintar();
 </script></body></html>""" % {"nombre": html.escape(nombre), "grid": GRID_FORM, "stub": STUB,
-                              "formatos": json.dumps(FORMATOS[pid])}
+                              "formatos": json.dumps(formatos), "pestanas": json.dumps(PESTANAS)}
 
 
 def _parrafos(lineas):

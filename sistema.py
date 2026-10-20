@@ -7,7 +7,8 @@ from datetime import datetime
 import navegador
 from comparar import MODOS_AGENDA, PacienteSistema, emparejar, parsear_identificacion
 from errores import Cancelado, ErrorApp
-from notas import (construir_tratamiento, interpretar_evolucion, interpretar_ordenes, normalizar)
+from notas import (clave, construir_evolucion, construir_tratamiento, en_renglones, extraer_dx,
+                   interpretar_evolucion, interpretar_ordenes, normalizar)
 
 GRID_PEND = "ctl00_cph1_cbpPanel1_grdPendientes"
 GRID_ATEN = "ctl00_cph1_cbpPanel1_grdAtendidos"
@@ -100,6 +101,83 @@ _JS_GRILLAS = _js("""
   };
   return [buscar(arg[0], 'pacientes por atender'), buscar(arg[1], 'pacientes atendidos')];
 """)
+
+
+# Panel «Detalle del Formato»: título «Formato: N - NOMBRE», pestañas DevExpress (dxtc-tab…) y controles visibles.
+_JS_DET = r"""
+const titulo = () => {
+  const c = [...document.querySelectorAll('td, th, span, div, h1, h2, h3, h4, h5, legend, b, strong, label')]
+    .filter(e => vis(e) && e.innerText.length < 300 && /^formato\s*:\s*\d+/.test(quitar(e.innerText)));
+  return c.find(e => !c.some(o => o !== e && e.contains(o))) || null;
+};
+const NOMBRES = ['diagnostico', 'unidad en donde se encuentra el paciente', 'hipotesis diagnostica', 'sintomas descritos',
+                 'examen fisico', 'analisis', 'plan', 'solicitud material especial'];
+const enGrilla = e => !!e.closest('[id^="' + arg.grid + '_"]');
+const pestanas = c => {
+  const esTab = e => [...e.classList].some(k => /^dxtc-?(active)?tab$/i.test(k));
+  let l = [...c.querySelectorAll('*')].filter(e => esTab(e) && vis(e) && borde(e.innerText));
+  l = l.filter(e => !l.some(o => o !== e && e.contains(o)));
+  if (!l.length) {
+    const vistos = new Set();
+    l = [...c.querySelectorAll('a, li, td, span')].filter(e => vis(e) && NOMBRES.includes(borde(e.innerText)));
+    l = l.filter(e => !l.some(o => o !== e && e.contains(o)) && !enGrilla(e)).filter(e => {
+      const k = borde(e.innerText); if (vistos.has(k)) return false; vistos.add(k); return true; });
+  }
+  return l.map(e => ({texto: e.innerText.trim(), clic: e.querySelector('a') || e,
+                      activa: [...e.classList].some(k => /active/i.test(k)) || !!e.closest('[class*="ctiveTab"], [class*="dxtc-active"]')}));
+};
+const controles = c => [...c.querySelectorAll('textarea, select, input')].filter(e => {
+  const t = (e.getAttribute('type') || 'text').toLowerCase();
+  return !['hidden', 'button', 'submit', 'image', 'checkbox', 'radio', 'reset', 'file'].includes(t) && !enGrilla(e) && vis(e);
+});
+const etiqueta = (e, c) => {
+  if (e.labels && e.labels.length) return e.labels[0].innerText.trim();
+  for (let a = e; a && a !== c; a = a.parentElement) {
+    if (a.tagName === 'TD' || a.tagName === 'TH') {
+      for (let p = a.previousElementSibling; p; p = p.previousElementSibling) {
+        const t = (p.innerText || '').trim();
+        if (t && !p.querySelector('textarea, select, input')) return t;
+      }
+    }
+  }
+  return '';
+};
+const valor = e => e.tagName === 'SELECT' ? [...e.selectedOptions].map(o => o.text).join(', ') : (e.value || '');
+const enCallback = () => {
+  try {
+    const col = ASPxClientControl.GetControlCollection().elements;
+    if (Object.values(col).some(x => x && x.InCallback && x.InCallback())) return true;
+  } catch (er) { /* sin librería */ }
+  return [...document.querySelectorAll('[class*="dxlp"], [id$="_LP"], [id*="LoadingPanel"]')].some(e => vis(e) && !/^\s*$/.test(e.innerText || 'x'));
+};
+const contenedor = () => {
+  const t = titulo();
+  for (let a = t && t.parentElement; a; a = a.parentElement) {
+    if (pestanas(a).length || controles(a).length) return a;
+  }
+  return null;
+};
+"""
+
+_JS_ESTADO = """
+  const c = contenedor();
+  if (!c) return null;
+  const tabs = pestanas(c);
+  let activa = false;
+  if (arg.i !== null) {
+    document.querySelectorAll('[data-kardex-tab]').forEach(e => e.removeAttribute('data-kardex-tab'));
+    const t = tabs[arg.i];
+    if (!t) return {textos: tabs.map(x => x.texto), n: 0, ausente: true};
+    t.clic.setAttribute('data-kardex-tab', '1');
+    activa = t.activa;
+  }
+  if (arg.guardar) window.__kardexPrev = controles(c);
+  const ctls = controles(c);
+  const prev = window.__kardexPrev || [];
+  return {textos: tabs.map(x => x.texto), activa: activa, n: ctls.length, nuevos: ctls.some(e => !prev.includes(e)),
+          cb: enCallback(), campos: arg.leer ? ctls.map(e => ({etiqueta: etiqueta(e, c), valor: valor(e), tag: e.tagName})) : []};
+"""
+
 
 
 def pagina_pide_login(page):
@@ -751,29 +829,137 @@ class Sistema:
     def _leer_textareas(self):
         return self.page.evaluate("[...document.querySelectorAll('textarea')].map(t=>t.value).join('\\n')")
 
-    def _ultimo_formato(self, filtro, preferir_usuarios=()):
-        """Filtra formatos, elige el más reciente (de especialistas si hay) y lo abre con 'Ver'."""
+    # --- panel «Detalle del Formato» (page control DevExpress con pestañas verticales)
+    def _titulo_detalle(self):
+        """(N° de formato, nombre) del título «Formato: 22807843 - HOJA DE EVOLUCION …» visible, o None."""
+        try:
+            r = self.page.evaluate(_js(_JS_DET + "const t = titulo(); return t ? t.innerText : null;"), {"grid": GRID_FORM})
+        except Exception:  # noqa: BLE001  (la página está cambiando)
+            return None
+        m = re.match(r"\s*formato\s*:\s*(\d+)\s*-?\s*(.*)", r or "", re.I | re.S)
+        return (m.group(1), m.group(2).strip()) if m else None
+
+    def _esperar_detalle(self, numero, antes=None, ms=20000):
+        """Espera el panel «Detalle del Formato» del formato elegido (su título lleva el N° de la fila). Sin N°
+        conocido, espera un título distinto del que había antes."""
+        for _ in range(max(1, ms // 250)):
+            t = self._titulo_detalle()
+            if t and ((numero and t[0] == numero) or (not numero and t != antes)):
+                return True
+            self.page.wait_for_timeout(250)
+        return False
+
+    def _estado(self, **kw):
+        arg = {"grid": GRID_FORM, "i": None, "guardar": False, "leer": False}
+        arg.update(kw)
+        return self.page.evaluate(_js(_JS_DET + _JS_ESTADO), arg)
+
+    def _leer_formato(self):
+        """Lee el «Detalle del Formato» pestaña por pestaña (clic real en cada una; solo una es visible a la vez).
+        Devuelve {pestaña: {etiqueta: valor, ..., "_texto": textareas unidas}} con pestañas y etiquetas normalizadas
+        (sin tildes, mayúsculas y sin signos en los bordes: «DIAGNOSTICO», «DX», «EXAMEN FISICO»…).
+        Sin pestañas (otro formato) devuelve todo en una sola entrada «FORMATO» con todas las textareas."""
+        est = self._estado(leer=True)
+        if not est or not est["textos"]:
+            campos = (est or {}).get("campos") or []
+            return {"FORMATO": self._campos_a_dict(campos, self._leer_textareas())}
+        res = {}
+        for i, nombre in enumerate(est["textos"]):
+            self._estado(guardar=True)
+            est = self._estado(i=i)
+            if est is None or est.get("ausente"):
+                continue
+            self.page.locator('[data-kardex-tab="1"]').first.click(timeout=5000)
+            activa, quieto, t0 = est["activa"], 0, time.time()
+            while time.time() - t0 < 10:
+                self.page.wait_for_timeout(250)
+                e = self._estado()
+                if e is None:
+                    continue
+                if e["cb"]:
+                    quieto = 0
+                    continue
+                if e["n"] and e["nuevos"]:
+                    break
+                quieto += 1
+                if e["n"] and activa and quieto >= 1:
+                    break
+                if (not e["n"] and quieto >= 6) or quieto >= 14:
+                    break
+            self.page.wait_for_timeout(150)
+            e = self._estado(leer=True) or {"campos": []}
+            tex = "\n".join(c["valor"] for c in e["campos"] if c["tag"] == "TEXTAREA" and c["valor"].strip())
+            k, n = clave(nombre) or f"PESTANA {i + 1}", 2
+            while k in res:
+                k, n = f"{clave(nombre)} {n}", n + 1
+            res[k] = self._campos_a_dict(e["campos"], tex)
+        return res
+
+    @staticmethod
+    def _campos_a_dict(campos, texto):
+        d = {}
+        for j, c in enumerate(campos, 1):
+            k, n = clave(c["etiqueta"]) or f"CAMPO {j}", 2
+            base = k
+            while k in d:
+                k, n = f"{base} {n}", n + 1
+            d[k] = c["valor"]
+        d["_texto"] = texto
+        return d
+
+    def _ultimo_formato(self, filtro, preferir_usuarios=(), estructurado=False):
+        """Filtra formatos, elige el más reciente (de especialistas si hay) y lo abre con 'Ver'; espera el panel
+        «Detalle del Formato» con el N° de esa fila. Con estructurado=True lee las pestañas (`_leer_formato`)."""
         self._filtrar(GRID_FORM, "Formato", filtro)
         filas = self.page.locator(f'[id^="{GRID_FORM}_DXDataRow"]')
         cand = []
         for i in range(filas.count()):
             celdas = filas.nth(i).locator("td").all_inner_texts()
             if len(celdas) >= 5:
-                cand.append((i, _fecha(celdas[2]), celdas[2].strip(), celdas[4].strip()))
+                cand.append((i, _fecha(celdas[2]), celdas[2].strip(), celdas[4].strip(), re.sub(r"\D", "", celdas[0])))
         if not cand:
             return None
         esp = [c for c in cand if any(normalizar(u) in normalizar(c[3]) for u in preferir_usuarios)]
         elegido = max(esp or cand, key=lambda c: c[1])
-        antes = self._leer_textareas()
+        antes = self._titulo_detalle()
         fila = filas.nth(elegido[0])
         ver = fila.get_by_text("Ver", exact=True)
         (ver.first if ver.count() else fila.locator("td").last).click()   # clic real: por JS no carga
-        for _ in range(40):
-            self.page.wait_for_timeout(500)
+        if not self._esperar_detalle(elegido[4], antes):
+            return None
+        r = {"fecha": elegido[2], "usuario": elegido[3], "es_especialista": bool(esp), "formato": None}
+        if estructurado:
+            r["formato"] = self._leer_formato()
+            r["texto"] = "\n".join(v.get("_texto", "") for v in r["formato"].values() if v.get("_texto"))
+            return r
+        for _ in range(40):                       # órdenes: texto completo (el contenido llega por callback)
             txt = self._leer_textareas()
-            if txt and txt != antes:
-                return {"texto": txt, "fecha": elegido[2], "usuario": elegido[3], "es_especialista": bool(esp)}
+            if txt.strip():
+                r["texto"] = txt
+                return r
+            self.page.wait_for_timeout(500)
         return None
+
+    @staticmethod
+    def _interpretar_formato(formato, texto, fecha, medico):
+        """dx / evolución / plan a partir de las pestañas leídas. Lo que no se pueda sacar de las pestañas
+        (formato sin ellas, sin campo DX…) se saca del texto completo como siempre (`interpretar_evolucion`)."""
+        base = interpretar_evolucion(texto, fecha, medico)
+        pest = lambda *nombres: next((formato[n] for n in nombres if n in formato), None)  # noqa: E731
+        diag, ana, pla = pest("DIAGNOSTICO"), pest("ANALISIS"), pest("PLAN")
+        sin, exa = pest("SINTOMAS DESCRITOS"), pest("EXAMEN FISICO")
+        txt = lambda d: (d or {}).get("_texto", "")  # noqa: E731
+        dx = base["dx"]
+        if diag and "DX" in diag:
+            dx = extraer_dx(diag["DX"])
+        evolucion = base["evolucion"]
+        if ana is not None or sin is not None or exa is not None:
+            partes = [txt(ana)] if txt(ana).strip() else [txt(sin), txt(exa)]
+            evolucion, _ = construir_evolucion(partes, fecha, medico, otros=[v.get("_texto", "") for v in formato.values()])
+        plan = base["plan"]
+        if pla is not None:
+            plan = en_renglones(re.sub(r"^\s*PLAN\b\s*[:\-]?", "", txt(pla), flags=re.I).strip()).upper()
+        return {"dx": dx, "evolucion": evolucion, "plan": plan}
 
     def detalle(self, p):
         """Rellena dx/evolución/tratamiento de p. Devuelve p."""
@@ -782,7 +968,7 @@ class Sistema:
                 p.aviso = "No pude abrir su historia desde la Agenda (no encontré «Atender»)."
                 return p
             esp = self.cfg.get("especialistas", [])
-            ev = self._ultimo_formato("HOJA DE EVOLUCION", esp)
+            ev = self._ultimo_formato("HOJA DE EVOLUCION", esp, estructurado=True)
             if not ev:
                 p.aviso = "No encontré hoja de evolución."
                 self.diagnostico("sin-evolucion-" + p.nombre.split()[0])
@@ -790,7 +976,7 @@ class Sistema:
             if not ev["es_especialista"]:
                 p.aviso = f"La hoja más reciente no es de un especialista de la lista ({ev['usuario']})."
             fecha = ev["fecha"].split(" ")[0]
-            info = interpretar_evolucion(ev["texto"], fecha, ev["usuario"])
+            info = self._interpretar_formato(ev["formato"], ev["texto"], fecha, ev["usuario"])
             p.fecha, p.medico = ev["fecha"], ev["usuario"]
             p.dx, p.evolucion = info["dx"], info["evolucion"]
             ordenes = []

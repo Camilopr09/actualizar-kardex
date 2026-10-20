@@ -82,6 +82,105 @@ def interpretar_evolucion(texto, fecha="", medico=""):
             "especialidad": especialidad.upper()}
 
 
+# ------------------------------------------------------------------ DX de la pestaña DIAGNOSTICO
+_MARCA = re.compile(r"^\s*(?:\d{1,2}[.)](?!\d)|[-•*])\s*")
+_DX_SOLO = re.compile(r"^(?:DIAGN[OÓ]STICOS?|DX|IDX|IMPRESI[OÓ]N\s+DIAGN[OÓ]STICA)\s*:?$", re.I)
+_DX_LINEA = re.compile(r"^(?:DIAGN[OÓ]STICOS?|DX|IDX|IMPRESI[OÓ]N\s+DIAGN[OÓ]STICA)\s*:\s*(\S.*)$", re.I)
+# encabezado de otra sección / título de la nota (nunca un renglón que empieza con marcador de ítem)
+_OTRA = re.compile(r"^(?:(?:EVOLUCI[OÓ]N|AN[AÁ]LISIS|PLAN|EXAMEN|SUBJETIVO|OBJETIVO|PARACL[IÍ]NICOS?|NOTA|MOTIVO"
+                   r"|ENFERMEDAD\s+ACTUAL|ANTECEDENTES|RONDA)\b|[SOAP]\s*:)", re.I)
+_TITULO_ESP = re.compile(r"^-\s*[^-\n]{2,60}?\s*-$")
+
+
+def _es_otra(linea):
+    return not _MARCA.match(linea) and bool(_OTRA.match(linea))
+
+
+def _es_titulo(linea):
+    return _es_otra(linea) or bool(_TITULO_ESP.match(linea))
+
+
+def _juntar_items(lineas):
+    """Un ítem por renglón: el renglón sin marcador continúa el ítem anterior (si hay marcadores en el texto)."""
+    hay_marcas = any(_MARCA.match(x) for x in lineas)
+    out = []
+    for x in lineas:
+        if out and hay_marcas and not _MARCA.match(x):
+            out[-1] += " " + x
+        else:
+            out.append(x)
+    res = []
+    for x in out:                                  # «1. A 2. B» en un solo renglón -> dos renglones
+        if re.match(r"\d{1,2}[.)](?!\d)", x):
+            x = re.sub(r"[ \t]+(?=\d{1,2}[.)][ \t]*[A-ZÁÉÍÓÚÑa-záéíóúñ])", "\n", x)
+        res.extend(x.split("\n"))
+    return res
+
+
+def extraer_dx(texto):
+    """Diagnósticos del campo «DX» de la hoja de evolución (puede traer título y otras secciones).
+    1. Con encabezado DIAGNOSTICO(S)/DX/IDX/IMPRESION DIAGNOSTICA (renglón solo con ese título, o «DX: …» con texto
+       después) esté donde esté: solo esa sección, hasta el siguiente encabezado de otra sección o el final.
+       Si hay varios encabezados de DX se usa el ÚLTIMO bloque.
+    2. Sin encabezado de DX: se quitan el título inicial y las secciones de otro tipo.
+    3. Sin títulos: todo el texto. Resultado en MAYÚSCULAS, un ítem por renglón."""
+    lineas = [x.strip() for x in (texto or "").replace("\r", "").split("\n")]
+    ini, primero = None, []
+    for i, x in enumerate(lineas):                  # el ÚLTIMO encabezado de DX manda
+        solo, linea = _DX_SOLO.match(x), _DX_LINEA.match(x)
+        if solo or linea:
+            ini, primero = i + 1, ([linea.group(1)] if linea else [])
+    if ini is not None:
+        cuerpo = primero
+        for x in lineas[ini:]:
+            if _es_otra(x):
+                break
+            cuerpo.append(x)
+    else:
+        i = 0
+        while i < len(lineas) and (not lineas[i] or _es_titulo(lineas[i])):
+            i += 1
+        cuerpo = []
+        for x in lineas[i:]:
+            if _es_otra(x):
+                break
+            cuerpo.append(x)
+        if any(_MARCA.match(x) for x in cuerpo if x):         # título libre antes del primer ítem
+            while cuerpo and not _MARCA.match(cuerpo[0]):
+                cuerpo.pop(0)
+    return "\n".join(_juntar_items([x for x in cuerpo if x])).upper()
+
+
+def clave(texto):
+    """Clave de pestaña/etiqueta: normalizada y sin signos en los bordes («-EXAMEN FISICO-» -> «EXAMEN FISICO»)."""
+    return re.sub(r"^[^A-Z0-9]+|[^A-Z0-9]+$", "", normalizar(texto))
+
+
+def especialidad_de(textos):
+    """«-CX GENERAL-» al comienzo de alguno de los textos. Devuelve (especialidad, [textos sin ese título])."""
+    esp, res = "", []
+    for t in textos:
+        m = None if esp else _ESPECIALIDAD.match(t or "")
+        if m:
+            esp = limpiar(m.group(1))
+            t = t[m.end():]
+        res.append(t)
+    return esp, res
+
+
+def construir_evolucion(partes, fecha="", medico="", otros=()):
+    """«DD/MM/AAAA - DR. NOMBRE (ESPECIALIDAD)» + los textos de `partes` en un solo párrafo (máx. 700 letras).
+    La especialidad se busca también en `otros`."""
+    esp, partes = especialidad_de(list(partes))
+    if not esp:
+        esp, _ = especialidad_de(list(otros))
+    cuerpo = re.sub(r"\s*\n\s*", " ", " ".join(limpiar(x) for x in partes if limpiar(x))).strip(" -:\n")
+    if len(cuerpo) > 700:
+        cuerpo = cuerpo[:700].rsplit(" ", 1)[0] + "…"
+    cab = encabezado_evolucion(fecha, medico, esp)
+    return (f"{cab}\n{cuerpo.upper()}" if cab and cuerpo else (cuerpo.upper() or cab)), esp.upper()
+
+
 def es_igual_manejo(plan):
     return bool(re.search(r"\bIGUAL(ES)?\s+MANEJO\b|\bCONTINUA\s+IGUAL\b", plan or "", re.I))
 
