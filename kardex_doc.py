@@ -207,7 +207,15 @@ def servicio_docs(carpeta, preferido="chrome"):
         else:
             flujo = InstalledAppFlow.from_client_secrets_file(str(cred_file), SCOPES)
             nav = "kardex" if navegador.registrar_webbrowser(preferido) else None   # el consentimiento se abre ahí
-            cred = flujo.run_local_server(port=0, browser=nav)
+            try:   # si la persona cierra la ventana de Google, no esperar para siempre
+                cred = flujo.run_local_server(port=0, browser=nav, timeout_seconds=300)
+            except Exception as e:  # noqa: BLE001
+                raise ErrorApp("credenciales", "No se completó el permiso de Google en 5 minutos. Vuelve a pulsar "
+                                               "«3. Escribir en el kardex» y acepta el permiso en la ventana que se abre "
+                                               "(si dice «Google no verificó esta app»: Configuración avanzada → "
+                                               "Ir a Actualizar Kardex).") from e
+            if not cred or not getattr(cred, "token", None):
+                raise ErrorApp("credenciales", "Google no devolvió el permiso. Vuelve a intentarlo.")
         token_file.write_text(cred.to_json())
     return build("docs", "v1", credentials=cred, cache_discovery=False)
 
