@@ -120,7 +120,7 @@ def test_recorrido_completo(app, tmp_path):
         expect(page.get_by_text("Paso 1. Abre el navegador")).to_be_visible()
         expect(page.get_by_text("Paso 2. Entra a Google con la cuenta del kardex")).to_be_visible()
         expect(page.locator("#sc-login")).to_contain_text(
-            "Hospital Office no guarda la sesión: la app entra sola en cada análisis con el usuario guardado en Ajustes, o te pide que entres tú.")
+            "Hospital Office guarda la sesión solo mientras su ventana está abierta: la app la deja abierta y entra sola con el usuario guardado en Ajustes, o te pide que entres tú.")
         foto(page, "02-primer-uso")
 
         # ---- Sesión (demo): En curso -> Hecho

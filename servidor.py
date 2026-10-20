@@ -13,6 +13,7 @@ from pathlib import Path
 import demo as modulo_demo
 import flujo
 import navegador
+from navegador_vivo import NavegadorVivo
 from comparar import emparejar
 from errores import Cancelado, ErrorApp
 
@@ -30,7 +31,7 @@ def carpeta_ui():
 class Servidor:
     """Estado de la app (en memoria) + servidor HTTP. Una sola tarea a la vez."""
 
-    def __init__(self, demo=False, puerto=0, token=None, ui_dir=None, abrir=None):
+    def __init__(self, demo=False, puerto=0, token=None, ui_dir=None, abrir=None, nav=None):
         self.demo = demo
         self.backend = modulo_demo.Demo() if demo else flujo
         self.token = token or secrets.token_urlsafe(24)
@@ -38,6 +39,9 @@ class Servidor:
         self.abrir_url = abrir or navegador.abrir
         self.cfg = flujo.cargar_config()
         self.lock = threading.RLock()
+        # navegador de automatización que vive mientras vive la app (en demo no hay navegador real)
+        self.nav = None if demo else (nav or NavegadorVivo(
+            flujo.carpeta_datos, lambda: flujo._preferido(self.cfg), self.log))
         self.cancel = threading.Event()
         self.sesion_terminar = threading.Event()
         self.sesion_pasos = {"hospital": False, "google": False}
@@ -72,11 +76,14 @@ class Servidor:
     def detener(self):
         self.salir.set()
         self.cancel.set()
+        self.sesion_terminar.set()
         try:
             self.httpd.shutdown()
         except Exception:  # noqa: BLE001
             pass
         self.httpd.server_close()
+        if self.nav is not None:
+            self.nav.cerrar()        # cierra la ventana de Hospital Office (espera a que la tarea en curso se cancele)
 
     def inactivo(self, segundos):
         with self.lock:
@@ -202,13 +209,13 @@ class Servidor:
             with self.lock:
                 self.sesion_pasos = {"hospital": bool(estado.get("hospital")), "google": bool(estado.get("google"))}
         return self.lanzar("sesion", lambda: self.backend.iniciar_sesion(
-            cfg, self.log, pasos, self.sesion_terminar.is_set))
+            self.nav, cfg, self.log, pasos, self.sesion_terminar.is_set))
 
     def tarea_analizar(self):
         cfg = dict(self.cfg)
 
         def trabajo():
-            return self.backend.analizar(cfg, self.log, self._progreso, self.cancel.is_set)
+            return self.backend.analizar(self.nav, cfg, self.log, self._progreso, self.cancel.is_set)
 
         def listo(res):
             sistema, kardex, acciones = res

@@ -101,7 +101,7 @@ class Demo:
     def credenciales_ok(self):
         return True
 
-    def iniciar_sesion(self, cfg, log, pasos=lambda estado: None, terminar=lambda: False):
+    def iniciar_sesion(self, nav, cfg, log, pasos=lambda estado: None, terminar=lambda: False):
         log("Modo demostración: simulo el inicio de sesión…")
         estado = {"hospital": False, "google": False}
         pasos(dict(estado))
@@ -117,7 +117,7 @@ class Demo:
         self._sesion = True
         log("Sesiones guardadas.")
 
-    def analizar(self, cfg, log, progreso, cancelado):
+    def analizar(self, nav, cfg, log, progreso, cancelado):
         log("Leyendo el kardex…")
         sistema, kardex = _datos()
         log(f"Kardex: {len(kardex)} pacientes")

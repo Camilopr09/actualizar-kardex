@@ -194,7 +194,7 @@ def test_cancelar_analisis(c, monkeypatch):
 def test_error_de_tarea(c, srv, monkeypatch):
     from errores import ErrorApp
 
-    def falla(cfg, log, progreso, cancelado):
+    def falla(nav, cfg, log, progreso, cancelado):
         raise ErrorApp("sesion", "Hospital Office pide iniciar sesión.")
     monkeypatch.setattr(srv.backend, "analizar", falla)
     c.post("/api/analizar")
@@ -309,3 +309,54 @@ def test_sesion_terminar_corta_la_tarea(c, monkeypatch):
     assert c.post("/api/sesion/terminar")[1] == {"ok": True}
     e = c.esperar_fin(0)
     assert e["ultima"] == {"n": 1, "tipo": "sesion", "fin": "ok"} and e["sesion_guardada"] is True
+
+
+def test_navegador_vivo_solo_en_modo_real(srv, datos_temporales):
+    assert srv.nav is None                                   # demo: sin navegador real
+    cerrado = []
+
+    class NavFalso:
+        def ejecutar(self, f, *a):
+            return f(None, *a)
+
+        def cerrar(self):
+            cerrado.append(1)
+    real = Servidor(demo=False, nav=NavFalso())
+    real.iniciar()
+    try:
+        assert isinstance(real.nav, NavFalso)
+    finally:
+        real.detener()
+    assert cerrado == [1]                                    # apagar la app cierra el navegador
+    por_defecto = Servidor(demo=False)
+    from navegador_vivo import NavegadorVivo
+    assert isinstance(por_defecto.nav, NavegadorVivo) and not por_defecto.nav.hilo_vivo   # perezoso
+    por_defecto.httpd.server_close()
+
+
+def test_las_tareas_reciben_el_navegador_vivo(datos_temporales, monkeypatch):
+    vistos = []
+
+    class Backend(demo.Demo):
+        def iniciar_sesion(self, nav, cfg, log, pasos, terminar):
+            vistos.append(("sesion", nav))
+
+        def analizar(self, nav, cfg, log, progreso, cancelado):
+            vistos.append(("analizar", nav))
+            raise ErrorApp("agenda", "x")
+    from errores import ErrorApp
+    nav = object()
+    s = Servidor(demo=False, nav=type("N", (), {"cerrar": lambda self: None})())
+    s.nav = nav
+    s.backend = Backend()
+    s.iniciar()
+    try:
+        k = Cliente(s)
+        k.post("/api/sesion")
+        k.esperar_fin(0)
+        k.post("/api/analizar")
+        k.esperar_fin(1)
+    finally:
+        s.nav = None
+        s.detener()
+    assert vistos == [("sesion", nav), ("analizar", nav)]

@@ -284,7 +284,8 @@ class Sistema:
     ESPERA_PERSONA = 300      # segundos que se espera a que la persona inicie sesión
     MSG_LOGIN_MALO = "Usuario o contraseña de Hospital Office no válidos"
 
-    def __init__(self, contexto, cfg, log, carpeta_diag, credenciales=None, progreso=None, cancelado=None):
+    def __init__(self, contexto, cfg, log, carpeta_diag, credenciales=None, progreso=None, cancelado=None,
+                 pagina=None):
         """credenciales: {'usuario','clave'} o None (entonces la persona inicia sesión en la ventana)."""
         self.ctx = contexto
         self.cfg = cfg
@@ -299,7 +300,7 @@ class Sistema:
         self._filtros = {}              # grilla -> {columna: texto} filtros puestos en esta carga de la página
         self._cols = {}                 # (grilla, columna) -> (posición, campo) descubiertos
         self._modo_actual = None
-        self.page = contexto.pages[0] if contexto.pages else contexto.new_page()
+        self.page = pagina or (contexto.pages[0] if contexto.pages else contexto.new_page())
         self.page.set_default_timeout(20000)
         self._frame = self.page.main_frame   # frame donde se vio la grilla: todas las operaciones sobre ella lo usan
         self._paso = ""                      # paso de la navegación que falló (mensaje para ErrorApp)

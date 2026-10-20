@@ -402,7 +402,7 @@ function renderStatus(){
     txt='Escribiendo en el kardex… no cierres esta ventana.';pl='Escribiendo';
     const p=E.progreso;if(p&&p.total>0){pct=Math.round(p.actual/p.total*100);pl=p.actual+'/'+p.total;}
   }else if(t&&t.tipo==='sesion'){
-    txt='Hay un navegador abierto para guardar tu sesión. Ciérralo cuando termines.';pl='Sesión en curso';
+    txt='Entra a Google en la ventana que se abrió. Puedes minimizarla cuando termines; no hace falta cerrarla.';pl='Sesión en curso';
   }else if(!R){
     txt=E.sesion_guardada?'Listo. Pega el enlace del kardex y pulsa «2. Analizar».':'Primero inicia sesión: pulsa «1. Iniciar sesión».';
   }else if(E.escritura&&E.escritura.escritas.length){
@@ -683,7 +683,7 @@ function renderLogin(){
   const steps=[
     ['Abre el navegador','Se abre '+nav+' con la Agenda de Hospital Office y el kardex en dos pestañas. Usa solo esa ventana.','Abrir '+nav+(saved&&!run?' de nuevo':'')],
     ['Entra a Google con la cuenta del kardex','En la pestaña del kardex elige la cuenta de Google que puede abrir el documento. Espera a ver el documento.',null],
-    ['Guardar sesión','Se guarda sola cuando detecto que entraste a Google. También puedes pulsar el botón o cerrar el navegador.','Guardar sesión ahora']
+    ['Guardar sesión','Se guarda sola cuando detecto que entraste a Google. También puedes pulsar el botón. La ventana queda abierta (puedes minimizarla); no la cierres.','Guardar sesión ahora']
   ];
   const sw=h('div',{class:'tag','data-t':saved?'ACTUALIZAR':'RETIRAR',style:'height:36px;font-size:15px;padding:0 14px'},h('span',{'aria-hidden':'true',text:saved?'✓':'✕'}),saved?'Sesión guardada':'Sin sesión guardada');
   clear(box);
@@ -708,7 +708,7 @@ function renderLogin(){
     }),
     h('div',{style:'display:flex;align-items:center;gap:14px;margin-top:2px'},
       ico('lock',22,'var(--ink)',2),
-      h('span',{style:'flex:1;font-size:15px;line-height:1.45;color:var(--mut)',text:'Hospital Office no guarda la sesión: la app entra sola en cada análisis con el usuario guardado en Ajustes, o te pide que entres tú. De Google solo se guarda la sesión del navegador ('+nav+'), en este computador.'}),
+      h('span',{style:'flex:1;font-size:15px;line-height:1.45;color:var(--mut)',text:'Hospital Office guarda la sesión solo mientras su ventana está abierta: la app la deja abierta y entra sola con el usuario guardado en Ajustes, o te pide que entres tú. De Google solo se guarda la sesión del navegador ('+nav+'), en este computador.'}),
       h('button',{class:'btn pri big',type:'button',onclick:()=>setScene('main')},'Ir al inicio'))));
 }
 async function startSesion(){
@@ -742,7 +742,7 @@ function buildAnalyzing(){
       h('div',{style:'display:flex;justify-content:space-between;margin-top:8px;font-size:15px;color:var(--mut)'},R.rem,R.pct)),
     h('div',{role:'alert',style:'display:flex;align-items:center;gap:14px;padding:14px 18px;border-radius:10px;border:3px double var(--revBd);background:var(--revBg);color:var(--revFg)'},
       ico('warn',28,'currentColor',2),
-      h('div',{style:'font-size:17px;line-height:1.4'},h('b',{text:'No cierres el navegador.'}),' La app lo usa para leer la historia clínica de cada paciente. Se cerrará solo al terminar.')),
+      h('div',{style:'font-size:17px;line-height:1.4'},h('b',{text:'La ventana de Hospital Office queda abierta para no perder la sesión;'}),' puedes minimizarla. Si la cierras, la app la vuelve a abrir y entra de nuevo.')),
     h('div',{class:'card',style:'flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden'},
       h('div',{class:'cap',style:'flex:none;padding:8px 16px;background:var(--surface2);border-bottom:1px solid var(--line)',text:'Registro en vivo'}),R.log)));
   S.ana=R;S.anaBuilt=true;

@@ -6,6 +6,7 @@ import pytest
 
 import flujo
 import sistema
+from navegador_vivo import NavegadorVivo
 from chromium_pruebas import disponible
 from errores import ErrorApp
 from simulador.servidor import CLAVE, GRID_PEND, USUARIO, Simulador
@@ -22,6 +23,20 @@ def navegador_de_prueba(monkeypatch, datos_temporales):
     flujo.hospital_guardar(USUARIO, CLAVE)          # por defecto la app entra sola
 
 
+@pytest.fixture
+def nav(datos_temporales):
+    """Navegador vivo de la prueba (se cierra al final)."""
+    n = NavegadorVivo(datos_temporales, lambda: "chrome")
+    yield n
+    n.cerrar()
+
+
+@pytest.fixture(autouse=True)
+def _nav_global(nav):
+    global NAV
+    NAV = nav
+
+
 def _cfg(sim):
     return {"url_kardex": sim.url_kardex, "url_agenda": sim.url_agenda,
             "especialistas": ["DAZA", "FABIAN", "EMILIANI"], "navegador": "chrome"}
@@ -29,7 +44,7 @@ def _cfg(sim):
 
 def _analizar(sim, cancelado=lambda: False):
     registro, avance = [], []
-    res = flujo.analizar(_cfg(sim), registro.append, lambda i, n, nombre: avance.append((i, n, nombre)), cancelado)
+    res = flujo.analizar(NAV, _cfg(sim), registro.append, lambda i, n, nombre: avance.append((i, n, nombre)), cancelado)
     return res, registro, avance
 
 
@@ -167,7 +182,7 @@ def test_credenciales_malas_dan_error_de_sesion_sin_la_clave_en_el_diagnostico(d
     with Simulador() as sim:
         registro = []
         with pytest.raises(ErrorApp) as e:
-            flujo.analizar(_cfg(sim), registro.append, lambda *a: None, lambda: False)
+            flujo.analizar(NAV, _cfg(sim), registro.append, lambda *a: None, lambda: False)
         assert sim.logins == 0
     assert e.value.codigo == "sesion" and e.value.mensaje.startswith("Usuario o contraseña de Hospital Office no válidos")
     assert flujo.hospital_credenciales() is None          # se borran para no bloquear la cuenta
@@ -201,7 +216,7 @@ def test_sin_credenciales_espera_a_que_la_persona_inicie_sesion(monkeypatch, dat
     registro, avance, esperas = [], [], []
     with Simulador() as sim:
         (pacientes, _, _) = flujo.analizar(
-            _cfg(sim), registro.append, lambda i, n, nombre: (esperas if i == 0 else avance).append((i, n, nombre)),
+            NAV, _cfg(sim), registro.append, lambda i, n, nombre: (esperas if i == 0 else avance).append((i, n, nombre)),
             cancelado)[0:3]
     assert hecho["login"] and len(pacientes) == 7 and len(avance) == 8
     assert esperas == [(0, 0, "Esperando inicio de sesión…")]
@@ -273,7 +288,7 @@ def test_agenda_sin_grillas_al_entrar_es_error_de_agenda():
 
 def _sesion(sim, **kw):
     pasos = []
-    flujo.iniciar_sesion(_cfg(sim), lambda m: None, pasos.append, **kw)
+    flujo.iniciar_sesion(NAV, _cfg(sim), lambda m: None, pasos.append, **kw)
     return pasos
 
 
@@ -297,6 +312,54 @@ def test_iniciar_sesion_con_login_no_cuenta_hospital():
             return len(llamadas) > 3
         pasos = _sesion(sim, terminar=terminar)
     assert all(p == {"hospital": False, "google": False} for p in pasos)
+
+
+def _ctx_vivo(nav):
+    return nav.ejecutar(lambda ctx: ctx)
+
+
+def test_dos_analisis_seguidos_hacen_un_solo_login(nav):
+    with Simulador() as sim:
+        (p1, _, _), _, _ = _analizar(sim)
+        ctx1 = _ctx_vivo(nav)
+        (p2, _, _), _, _ = _analizar(sim)
+        assert _ctx_vivo(nav) is ctx1               # el navegador no se cerró entre análisis
+        assert sim.logins == 1
+        # una sola pestaña de Hospital Office reutilizada: no se acumulan pestañas
+        assert nav.ejecutar(lambda ctx: len(ctx.pages)) == 1
+    assert len(p1) == len(p2) == 7
+
+
+def test_tras_un_error_de_agenda_el_contexto_sigue_abierto(nav):
+    with Simulador(con_atencion_en_menu=False) as sim:
+        with pytest.raises(ErrorApp) as e:
+            _analizar(sim)
+        assert e.value.codigo == "agenda"
+        ctx = _ctx_vivo(nav)
+        assert nav.ejecutar(lambda c: [p.is_closed() for p in c.pages]) == [False]
+        assert _ctx_vivo(nav) is ctx
+
+
+def test_si_se_cierra_el_contexto_entre_analisis_se_reabre_y_se_vuelve_a_entrar(nav):
+    with Simulador() as sim:
+        _analizar(sim)
+        assert sim.logins == 1
+        ctx1 = _ctx_vivo(nav)
+        nav.ejecutar(lambda ctx: ctx.close())             # «la persona cerró la ventana»
+        (p2, _, _), _, _ = _analizar(sim)
+        assert _ctx_vivo(nav) is not ctx1
+        assert sim.logins == 2
+    assert len(p2) == 7
+
+
+def test_iniciar_sesion_no_cierra_el_navegador(nav):
+    with Simulador(exige_login=False, agenda_requiere_menu=False) as sim:
+        llamadas = []
+        _sesion(sim, terminar=lambda: llamadas.append(1) or len(llamadas) > 2)
+        assert nav.ejecutar(lambda ctx: len(ctx.pages)) == 2      # Agenda + kardex, abiertas
+        (pacientes, _, _), _, _ = _analizar(sim)                    # reutiliza la pestaña de la Agenda
+        assert nav.ejecutar(lambda ctx: len(ctx.pages)) == 2
+    assert len(pacientes) == 7
 
 
 # ---------------------------------------------------------------- pruebas con el Sistema directo
