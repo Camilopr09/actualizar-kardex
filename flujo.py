@@ -6,6 +6,7 @@ from pathlib import Path
 
 import kardex_doc
 import navegador
+import secreto
 from comparar import comparar, emparejar
 from errores import Cancelado, ErrorApp
 
@@ -59,6 +60,24 @@ def sesion_guardada(cfg):
         return False
 
 
+def hospital_credenciales():
+    """{'usuario','clave'} guardados para Hospital Office, o None."""
+    return secreto.leer_hospital(carpeta_datos())
+
+
+def hospital_usuario():
+    c = hospital_credenciales()
+    return c["usuario"] if c else ""
+
+
+def hospital_guardar(usuario, clave):
+    secreto.guardar_hospital(carpeta_datos(), usuario, clave)
+
+
+def hospital_quitar():
+    secreto.quitar_hospital(carpeta_datos())
+
+
 def credenciales_ok():
     return (carpeta_datos() / "credentials.json").exists()
 
@@ -92,7 +111,8 @@ def _revisar_sesion(ctx, host_agenda):
 
 def iniciar_sesion(cfg, log, pasos=lambda estado: None, terminar=lambda: False):
     """Abre el navegador para que la persona inicie sesión. Termina cuando detecta que entró a
-    Hospital Office y a Google (3 revisiones seguidas), cuando terminar() es True o cuando cierra el navegador.
+    Google (3 revisiones seguidas), cuando terminar() es True o cuando cierra el navegador.
+    Hospital Office se informa, pero no es requisito: su sesión no persiste (la app entra en cada análisis).
     pasos({"hospital": bool, "google": bool}) se llama cada vez que cambia."""
     from playwright.sync_api import sync_playwright
     from urllib.parse import urlparse
@@ -103,8 +123,8 @@ def iniciar_sesion(cfg, log, pasos=lambda estado: None, terminar=lambda: False):
         p1 = ctx.pages[0] if ctx.pages else ctx.new_page()
         p1.goto(cfg["url_agenda"])
         ctx.new_page().goto(cfg["url_kardex"])
-        log("Inicia sesión en Hospital Office (pestaña 1) y en Google (pestaña 2). "
-            "Se guarda sola cuando detecte que entraste a los dos.")
+        log("Entra a Google con la cuenta del kardex (pestaña 2). Se guarda sola cuando detecte que entraste. "
+            "Hospital Office (pestaña 1) no guarda la sesión: no hace falta entrar ahí.")
         cerrado = []
         ctx.on("close", lambda *_: cerrado.append(1))
         ultimo, seguidas = {"hospital": False, "google": False}, 0
@@ -118,9 +138,8 @@ def iniciar_sesion(cfg, log, pasos=lambda estado: None, terminar=lambda: False):
                 log("Sesiones guardadas.")
                 return
             if terminar():
-                faltan = [n for n, k in (("Hospital Office", "hospital"), ("Google", "google")) if not ultimo[k]]
-                if faltan:
-                    log("Guardo la sesión, pero no detecté que entraras a " + " ni a ".join(faltan) + ".")
+                if not ultimo["google"]:
+                    log("Guardo la sesión, pero no detecté que entraras a Google.")
                 else:
                     log("Guardo la sesión…")
                 break
@@ -128,9 +147,9 @@ def iniciar_sesion(cfg, log, pasos=lambda estado: None, terminar=lambda: False):
             if estado != ultimo:
                 ultimo = estado
                 pasos(dict(estado))
-            seguidas = seguidas + 1 if (estado["hospital"] and estado["google"]) else 0
+            seguidas = seguidas + 1 if estado["google"] else 0
             if seguidas >= 3:
-                log("Detecté que ya entraste a Hospital Office y a Google. Guardo la sesión…")
+                log("Detecté que ya entraste a Google. Guardo la sesión…")
                 break
             time.sleep(1)
         try:
@@ -157,7 +176,8 @@ def analizar(cfg, log, progreso, cancelado):
                                          f"(tablas encontradas: {n}; primera celda de la primera tabla: «{primera}»). "
                                          "Revisa que el enlace sea el del KARDEX y la pestaña correcta.")
             log(f"Kardex: {len(kardex)} pacientes")
-            s = sistema.Sistema(ctx, cfg, log, carpeta_datos() / "diagnostico")
+            s = sistema.Sistema(ctx, cfg, log, carpeta_datos() / "diagnostico",
+                                credenciales=hospital_credenciales(), progreso=progreso, cancelado=cancelado)
             log("Leyendo la Agenda de Hospital Office…")
             pacientes = s.listar()
             log(f"Sistema: {len(pacientes)} pacientes")
@@ -175,6 +195,13 @@ def analizar(cfg, log, progreso, cancelado):
                 p = por_nombre[nom]
                 p.tratamiento = f.tratamiento      # base para «IGUAL MANEJO»
                 s.detalle(p)
+        except ErrorApp as e:
+            if e.codigo == "sesion" and e.mensaje.startswith(sistema.Sistema.MSG_LOGIN_MALO):
+                # no reintentar con una clave mala en cada análisis: podría bloquear la cuenta
+                hospital_quitar()
+                raise ErrorApp("sesion", e.mensaje + ". Borré el usuario guardado para no bloquear tu cuenta: "
+                                         "vuelve a guardarlo en Ajustes.") from e
+            raise
         finally:
             try:
                 ctx.close()

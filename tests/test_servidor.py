@@ -226,6 +226,42 @@ def test_credenciales(c, datos_temporales):
     assert c.post("/api/credenciales/quitar")[0] == 200        # idempotente
 
 
+def test_hospital_guardar_y_quitar(c, srv):
+    e = c.estado()
+    assert e["hospital_guardado"] is False and e["hospital_usuario"] == ""
+    for malo in ({}, {"usuario": "", "clave": "x"}, {"usuario": "u", "clave": ""}, {"usuario": "  ", "clave": "x"},
+                 {"usuario": 5, "clave": "x"}):
+        st, r = c.post("/api/hospital", malo)
+        assert st == 400 and r["ok"] is False
+    assert c.estado()["hospital_guardado"] is False
+    assert c.post("/api/hospital", {"usuario": " medico.prueba ", "clave": "Clave-Muy-Secreta-77"}) == (200, {"ok": True})
+    e = c.estado()
+    assert e["hospital_guardado"] is True and e["hospital_usuario"] == "medico.prueba"
+    assert "Clave-Muy-Secreta-77" not in json.dumps(e, ensure_ascii=False)      # ni en el registro ni en el estado
+    assert c.post("/api/hospital/quitar")[1] == {"ok": True}
+    e = c.estado()
+    assert e["hospital_guardado"] is False and e["hospital_usuario"] == ""
+    assert c.post("/api/hospital/quitar")[0] == 200
+
+
+def test_hospital_en_modo_real_se_guarda_cifrado(datos_temporales, monkeypatch):
+    s = Servidor(demo=False)
+    s.iniciar()
+    try:
+        k = Cliente(s)
+        assert k.post("/api/hospital", {"usuario": "medico.prueba", "clave": "Clave-Muy-Secreta-77"})[0] == 200
+        crudo = (datos_temporales / "hospital.bin").read_bytes()
+        assert b"Clave-Muy-Secreta-77" not in crudo
+        assert flujo.hospital_credenciales() == {"usuario": "medico.prueba", "clave": "Clave-Muy-Secreta-77"}
+        e = k.estado()
+        assert e["hospital_guardado"] and "Clave-Muy-Secreta-77" not in json.dumps(e)
+        assert not any("Clave-Muy-Secreta-77" in linea for linea in e["registro"])
+        k.post("/api/hospital/quitar")
+        assert not (datos_temporales / "hospital.bin").exists()
+    finally:
+        s.detener()
+
+
 def test_escribir_sin_credenciales(c, srv, monkeypatch):
     monkeypatch.setattr(srv.backend, "credenciales_ok", lambda: False)
     st, r = c.post("/api/escribir", {"ids": ["a0"]})

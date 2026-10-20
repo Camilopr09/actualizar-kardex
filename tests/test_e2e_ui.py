@@ -109,6 +109,8 @@ def test_recorrido_completo(app, tmp_path):
         expect(page.get_by_text("Todavía no hay resultados")).to_be_visible()
         expect(page.locator("#sesText")).to_have_text("Sin sesión guardada")
         expect(page.locator("#demoTag")).to_be_visible()
+        expect(page.locator("#hoAviso")).to_be_visible()
+        expect(page.locator("#hoAviso")).to_contain_text("Hospital Office: sin usuario guardado")
         foto(page, "01-principal-vacia")
 
         # ---- Analizar sin sesión: aviso y Primer uso
@@ -116,6 +118,9 @@ def test_recorrido_completo(app, tmp_path):
         expect(page.locator("#toast")).to_contain_text("Primero inicia sesión")
         expect(page.locator("#sc-login")).to_be_visible()
         expect(page.get_by_text("Paso 1. Abre el navegador")).to_be_visible()
+        expect(page.get_by_text("Paso 2. Entra a Google con la cuenta del kardex")).to_be_visible()
+        expect(page.locator("#sc-login")).to_contain_text(
+            "Hospital Office no guarda la sesión: la app entra sola en cada análisis con el usuario guardado en Ajustes, o te pide que entres tú.")
         foto(page, "02-primer-uso")
 
         # ---- Sesión (demo): En curso -> Hecho
@@ -325,6 +330,26 @@ def test_recorrido_completo(app, tmp_path):
         page.get_by_role("button", name="Quitar credenciales").click()
         expect(page.locator("#toast")).to_contain_text("Credenciales quitadas")
         assert not (app["datos"] / "credentials.json").exists()
+        # Hospital Office: aviso en la principal, guardar y quitar (en demostración vive en memoria)
+        assert _api(app, "/api/estado")["hospital_guardado"] is False
+        expect(page.locator("#hoStat")).to_contain_text("Sin guardar: tendrás que iniciar sesión tú en cada análisis")
+        expect(page.get_by_text("La contraseña se guarda cifrada con Windows solo para tu usuario de este computador.")).to_be_visible()
+        assert page.locator("#hoPass").get_attribute("type") == "password"
+        assert page.locator("#hoPass").get_attribute("autocomplete") == "off"
+        page.get_by_role("button", name="Guardar", exact=True).click()
+        expect(page.locator("#toast")).to_contain_text("Escribe el usuario y la contraseña")
+        page.locator("#hoUser").fill("medico.prueba")
+        page.locator("#hoPass").fill("Clave-Inventada-123")
+        page.get_by_role("button", name="Guardar", exact=True).click()
+        expect(page.locator("#toast")).to_contain_text("Usuario de Hospital Office guardado")
+        expect(page.locator("#hoStat")).to_contain_text("Guardado para medico.prueba")
+        est = _api(app, "/api/estado")
+        assert est["hospital_guardado"] and est["hospital_usuario"] == "medico.prueba"
+        assert "Clave-Inventada-123" not in json.dumps(est)
+        assert page.locator("#hoPass").input_value() == ""
+        page.get_by_role("button", name="Quitar", exact=True).click()
+        expect(page.locator("#toast")).to_contain_text("Usuario de Hospital Office quitado")
+        expect(page.locator("#hoStat")).to_contain_text("Sin guardar")
         foto(page, "13-ajustes-editados")
         page.get_by_role("button", name="Guardar ajustes").click()
         expect(page.locator("#toast")).to_contain_text("Ajustes guardados")

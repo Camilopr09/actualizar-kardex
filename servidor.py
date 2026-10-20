@@ -137,6 +137,8 @@ class Servidor:
                 "navegadores": self._navegadores(),
                 "sesion_guardada": bool(self.backend.sesion_guardada(self.cfg)),
                 "credenciales": bool(self.backend.credenciales_ok()),
+                "hospital_guardado": bool(self.backend.hospital_usuario()),
+                "hospital_usuario": self.backend.hospital_usuario(),     # nunca la clave
                 "sesion_pasos": dict(self.sesion_pasos),
                 "tarea": {"tipo": self.tarea} if self.tarea else None,
                 "ultima": dict(self.ultima) if self.ultima else None,
@@ -281,6 +283,17 @@ class Servidor:
             except FileNotFoundError:
                 pass
 
+    def guardar_hospital(self, usuario, clave):
+        """Guarda cifrado el usuario y la clave de Hospital Office. La clave no se registra ni se devuelve."""
+        if not isinstance(usuario, str) or not usuario.strip() or not isinstance(clave, str) or not clave:
+            raise ValueError("Escribe el usuario y la contraseña de Hospital Office.")
+        self.backend.hospital_guardar(usuario.strip(), clave)
+        self.log("Usuario de Hospital Office guardado.")
+
+    def quitar_hospital(self):
+        self.backend.hospital_quitar()
+        self.log("Usuario de Hospital Office quitado.")
+
     def abrir(self, que):
         with self.lock:
             url, pref = self.cfg["url_kardex" if que == "kardex" else "url_agenda"], self.cfg.get("navegador", "chrome")
@@ -389,6 +402,7 @@ class _Handler(BaseHTTPRequestHandler):
             "/api/config": self._config, "/api/sesion": self._sesion, "/api/sesion/terminar": self._sesion_terminar, "/api/analizar": self._analizar,
             "/api/cancelar": self._cancelar, "/api/escribir": self._escribir, "/api/abrir": self._abrir,
             "/api/credenciales": self._credenciales, "/api/credenciales/quitar": self._quitar,
+            "/api/hospital": self._hospital, "/api/hospital/quitar": self._hospital_quitar,
             "/api/salir": self._salir,
         }.get(ruta)
         if not accion:
@@ -449,6 +463,17 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _quitar(self, _):
         self.app.quitar_credenciales()
+        self._json(200, {"ok": True})
+
+    def _hospital(self, d):
+        try:
+            self.app.guardar_hospital(d.get("usuario"), d.get("clave"))
+        except ValueError as e:
+            return self._fallo(400, str(e))
+        self._json(200, {"ok": True})
+
+    def _hospital_quitar(self, _):
+        self.app.quitar_hospital()
         self._json(200, {"ok": True})
 
     def _salir(self, _):

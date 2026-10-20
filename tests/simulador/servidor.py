@@ -8,13 +8,20 @@ Imita lo que describe sistema.py:
   * /HistoriaClinica.aspx: grilla ctl00_cph1_ASPxRoundPanel2_grdFormatos (N°, Formato, Fecha hora, Estado,
     Usuario, Ver); «Ver» llena los textareas de «Detalle del Formato» tras un pequeño retardo.
   * /kardex: kardex exportado (HTML de Google Docs, simplificado).
-  * /Login.aspx: página de inicio de sesión.
+  * Inicio de sesión fiel a lo reportado: /Login.aspx (usuario, contraseña, botón «Ingresar») pone una cookie de
+    sesión (sin expires); tras entrar lleva a /Inicio.aspx, con el botón «Menu Principal» -> /Menu.aspx, con el
+    enlace «Atención de Pacientes» -> /Agenda.aspx. Agenda.aspx sin cookie redirige a login y, sin haber pasado por
+    el menú en esa sesión, no trae las grillas. La sesión puede «vencer» tras N peticiones protegidas.
 """
 import html
 import json
 import threading
+import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+
+USUARIO = "medico.prueba"
+CLAVE = "Clave-Inventada-123"
 
 GRID_PEND = "ctl00_cph1_cbpPanel1_grdPendientes"
 GRID_ATEN = "ctl00_cph1_cbpPanel1_grdAtendidos"
@@ -112,9 +119,26 @@ function crearGrilla(id, columnas, filas, pintar) {
 }
 """
 
-LOGIN = """<!doctype html><html><head><meta charset="utf-8"><title>Iniciar sesión</title></head><body>
-<h1>Hospital Office</h1><form method="post"><label>Usuario <input name="u" type="text"></label>
-<label>Contraseña <input name="p" type="password"></label><button>Entrar</button></form></body></html>"""
+def pagina_login(error="", usuario="", clave=""):
+    """Si hay error, repite lo escrito (la clave también: un sistema descuidado haría eso)."""
+    return ("""<!doctype html><html><head><meta charset="utf-8"><title>Iniciar sesión</title></head><body>
+<h1>Hospital Office</h1>%s<form method="post" action="/Login.aspx"><label>Usuario <input name="u" type="text" value="%s"></label>
+<label>Contraseña <input name="p" type="password" value="%s"></label><button type="submit">Ingresar</button></form></body></html>"""
+            % (f'<p class="err">{html.escape(error)}</p>' if error else "",
+               html.escape(usuario, quote=True), html.escape(clave, quote=True)))
+
+
+LOGIN = pagina_login()
+
+INICIO = """<!doctype html><html><head><meta charset="utf-8"><title>Inicio</title></head><body>
+<h1>Bienvenido a Hospital Office</h1>
+<button type="button" onclick="location.href='/Menu.aspx'">Menu Principal</button></body></html>"""
+
+MENU = """<!doctype html><html><head><meta charset="utf-8"><title>Menú</title></head><body>
+<h1>Menú</h1><ul><li><a href="/Otro.aspx">Facturación</a></li>
+<li><a href="/Agenda.aspx">Atención de Pacientes</a></li></ul></body></html>"""
+
+SIN_MENU = "<html><body><h1>Seleccione una opción del menú</h1></body></html>"
 
 
 def pagina_agenda(datos):
@@ -230,13 +254,20 @@ def pagina_kardex():
 
 # --------------------------------------------------------------------------- servidor
 class Simulador:
-    """modo_login: None (sesión válida), 'redirigir' (302 a /Login.aspx) o 'en_pagina' (la Agenda muestra el formulario).
-    agenda_rota_en: números de visita a la Agenda (1, 2, 3…) que devuelven una página sin grillas."""
+    """exige_login: sin cookie de sesión, Agenda/Historia/Inicio/Menú redirigen a /Login.aspx.
+    agenda_requiere_menu: la Agenda solo trae las grillas si en esa sesión se pasó por /Menu.aspx.
+    vence_tras: la sesión «vence» (se borran todas) al recibir esa cantidad de peticiones protegidas.
+    agenda_rota_en: números de visita a la Agenda con grillas (1, 2, 3…) que devuelven una página sin grillas."""
 
-    def __init__(self, modo_login=None, agenda_rota_en=()):
-        self.modo_login = modo_login
+    def __init__(self, agenda_rota_en=(), exige_login=True, agenda_requiere_menu=True, vence_tras=None):
+        self.exige_login = exige_login
+        self.agenda_requiere_menu = agenda_requiere_menu
+        self.vence_tras = vence_tras
         self.agenda_rota_en = set(agenda_rota_en)
         self.visitas_agenda = 0
+        self.protegidas = 0
+        self.logins = 0
+        self.sesiones = {}                  # sid -> {"menu": bool}
         self.kardex_sirve = True
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.puerto = self.httpd.server_address[1]
@@ -266,13 +297,45 @@ class Simulador:
             def log_message(self, *_):
                 pass
 
-            def _html(self, cuerpo, codigo=200):
+            def _html(self, cuerpo, codigo=200, cabeceras=()):
                 b = cuerpo.encode("utf-8")
                 self.send_response(codigo)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(b)))
+                for k, v in cabeceras:
+                    self.send_header(k, v)
                 self.end_headers()
                 self.wfile.write(b)
+
+            def _redirigir(self, destino, cabeceras=()):
+                self.send_response(302)
+                self.send_header("Location", destino)
+                self.send_header("Content-Length", "0")
+                for k, v in cabeceras:
+                    self.send_header(k, v)
+                self.end_headers()
+
+            def _sesion(self):
+                for parte in (self.headers.get("Cookie") or "").split(";"):
+                    k, _, v = parte.strip().partition("=")
+                    if k == "sid" and v in sim.sesiones:
+                        return sim.sesiones[v]
+                return None
+
+            def do_POST(self):
+                u = urlparse(self.path)
+                n = int(self.headers.get("Content-Length") or 0)
+                campos = parse_qs(self.rfile.read(n).decode("utf-8"))
+                if u.path.lower() != "/login.aspx":
+                    return self._html("no existe", 404)
+                usuario, clave = campos.get("u", [""])[0], campos.get("p", [""])[0]
+                if usuario == USUARIO and clave == CLAVE:
+                    sim.logins += 1
+                    sid = secrets.token_hex(8)
+                    sim.sesiones[sid] = {"menu": False}
+                    # cookie de sesión: sin Expires ni Max-Age (se pierde al cerrar el navegador)
+                    return self._redirigir("/Inicio.aspx", [("Set-Cookie", f"sid={sid}; Path=/; HttpOnly")])
+                self._html(pagina_login("Usuario o contraseña incorrectos", usuario, clave))
 
             def do_GET(self):
                 u = urlparse(self.path)
@@ -281,19 +344,26 @@ class Simulador:
                     return self._html(LOGIN)
                 if ruta == "/kardex":
                     return self._html(pagina_kardex()) if sim.kardex_sirve else self._html("no", 404)
-                if ruta == "/agenda.aspx":
-                    sim.visitas_agenda += 1
-                    if sim.modo_login == "redirigir":
-                        self.send_response(302)
-                        self.send_header("Location", "/Login.aspx?ReturnUrl=%2fAgenda.aspx")
-                        self.end_headers()
-                        return
-                    if sim.modo_login == "en_pagina":
-                        return self._html(LOGIN)
-                    if sim.visitas_agenda in sim.agenda_rota_en:
-                        return self._html("<html><body><h1>Error inesperado</h1></body></html>")
-                    return self._html(pagina_agenda([list(p) for p in PACIENTES]))
-                if ruta == "/historiaclinica.aspx":
+                if ruta in ("/inicio.aspx", "/menu.aspx", "/agenda.aspx", "/historiaclinica.aspx"):
+                    sim.protegidas += 1
+                    if sim.vence_tras and sim.protegidas == sim.vence_tras:
+                        sim.sesiones.clear()                  # la sesión vence a mitad del análisis
+                    ses = self._sesion()
+                    if sim.exige_login and ses is None:
+                        return self._redirigir("/Login.aspx?ReturnUrl=" + u.path)
+                    ses = ses if ses is not None else {"menu": True}
+                    if ruta == "/inicio.aspx":
+                        return self._html(INICIO)
+                    if ruta == "/menu.aspx":
+                        ses["menu"] = True
+                        return self._html(MENU)
+                    if ruta == "/agenda.aspx":
+                        if sim.agenda_requiere_menu and not ses["menu"]:
+                            return self._html(SIN_MENU)
+                        sim.visitas_agenda += 1
+                        if sim.visitas_agenda in sim.agenda_rota_en:
+                            return self._html("<html><body><h1>Error inesperado</h1></body></html>")
+                        return self._html(pagina_agenda([list(p) for p in PACIENTES]))
                     try:
                         pid = int(parse_qs(u.query).get("id", ["0"])[0])
                         return self._html(pagina_historia(pid))

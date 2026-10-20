@@ -83,6 +83,16 @@ class Demo:
 
     def __init__(self):
         self._sesion = False
+        self._hospital = None        # en demostración solo vive en memoria
+
+    def hospital_usuario(self):
+        return self._hospital[0] if self._hospital else ""
+
+    def hospital_guardar(self, usuario, clave):
+        self._hospital = (usuario, clave)
+
+    def hospital_quitar(self):
+        self._hospital = None
 
     def sesion_guardada(self, cfg):
         return self._sesion

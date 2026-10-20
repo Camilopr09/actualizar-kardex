@@ -121,6 +121,9 @@ h1,h2,p{margin:0}
 <div id="pbar" role="progressbar" aria-label="Progreso" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="width:260px;height:12px;border-radius:6px;background:var(--surface2);border:1px solid var(--line2);overflow:hidden"><div id="pfill" style="height:100%;background:var(--pri);width:0"></div></div>
 </div>
 
+<div id="hoAviso" hidden style="flex:none;display:flex;font-size:14px;color:var(--mut);align-items:center;gap:6px">Hospital Office: sin usuario guardado, tendrás que iniciar sesión tú en cada análisis.
+<button type="button" id="hoLink" style="background:none;border:0;padding:0;font:inherit;font-weight:700;color:inherit;text-decoration:underline;cursor:pointer">Guardarlo en Ajustes</button></div>
+
 <div style="flex:none;display:flex;align-items:flex-end;gap:12px">
 <div id="tabs" role="tablist" aria-label="Resultados" style="display:flex;gap:4px"></div>
 <span style="flex:1"></span>
@@ -383,6 +386,7 @@ function renderMain(full){
   // botón escribir
   const nChecked=checkedIds().length;
   $('bWrite').setAttribute('aria-disabled',(!R||!E.credenciales)?'true':'false');
+  $('hoAviso').hidden=!!E.hospital_guardado;
   renderStatus();
   renderTabs();
   $('typeF').hidden=S.tab!=='act';
@@ -671,15 +675,15 @@ function renderLogin(){
   const saved=E.sesion_guardada;
   const nav=E.config.navegador==='brave'?'Brave':'Chrome';
   const sp=E.sesion_pasos||{};
-  const both=!!(sp.hospital&&sp.google);
+  const both=!!sp.google;
   let st; // estados por paso: [done, status, primary, disabled]
   if(run)st=[[true,'Hecho',false,true],[both,both?'Hecho':'En curso',false,true],[false,'Esperando…',false,false]];
   else if(saved)st=[[true,'Hecho',false,false],[true,'Hecho',false,true],[true,'Hecho',false,true]];
   else st=[[false,'Siguiente paso',true,false],[false,'Pendiente',false,true],[false,'Pendiente',false,true]];
   const steps=[
     ['Abre el navegador','Se abre '+nav+' con la Agenda de Hospital Office y el kardex en dos pestañas. Usa solo esa ventana.','Abrir '+nav+(saved&&!run?' de nuevo':'')],
-    ['Entra a Hospital Office y a Google','En cada pestaña escribe tu usuario y contraseña (Hospital Office) y elige la cuenta de Google que puede abrir el kardex. Espera a ver la Agenda y el documento.',null],
-    ['Guardar sesión','Se guarda sola cuando detecto que entraste a los dos. También puedes pulsar el botón o cerrar el navegador.','Guardar sesión ahora']
+    ['Entra a Google con la cuenta del kardex','En la pestaña del kardex elige la cuenta de Google que puede abrir el documento. Espera a ver el documento.',null],
+    ['Guardar sesión','Se guarda sola cuando detecto que entraste a Google. También puedes pulsar el botón o cerrar el navegador.','Guardar sesión ahora']
   ];
   const sw=h('div',{class:'tag','data-t':saved?'ACTUALIZAR':'RETIRAR',style:'height:36px;font-size:15px;padding:0 14px'},h('span',{'aria-hidden':'true',text:saved?'✓':'✕'}),saved?'Sesión guardada':'Sin sesión guardada');
   clear(box);
@@ -704,7 +708,7 @@ function renderLogin(){
     }),
     h('div',{style:'display:flex;align-items:center;gap:14px;margin-top:2px'},
       ico('lock',22,'var(--ink)',2),
-      h('span',{style:'flex:1;font-size:15px;color:var(--mut)',text:'La app no guarda tus contraseñas: solo la sesión del navegador ('+nav+'), en este computador. Si vence, se te avisará.'}),
+      h('span',{style:'flex:1;font-size:15px;line-height:1.45;color:var(--mut)',text:'Hospital Office no guarda la sesión: la app entra sola en cada análisis con el usuario guardado en Ajustes, o te pide que entres tú. De Google solo se guarda la sesión del navegador ('+nav+'), en este computador.'}),
       h('button',{class:'btn pri big',type:'button',onclick:()=>setScene('main')},'Ir al inicio'))));
 }
 async function startSesion(){
@@ -849,7 +853,7 @@ function errInfo(E){
   const nav=E.config.navegador==='brave'?'Brave':'Chrome';
   const retry=()=>doAnalyze(),toSet=()=>setScene('settings'),toMain=()=>setScene('main');
   const T={
-    sesion:{tag:'RETIRAR',label:'SESIÓN',title:'Tu sesión venció',body:'Hospital Office o Google cerraron la sesión guardada. Por seguridad hay que entrar de nuevo. No se perdió ni se cambió nada en el kardex.',steps:['Pulsa «Iniciar sesión de nuevo».','Entra a Hospital Office y a Google en el navegador que se abre.','Cierra el navegador y vuelve a pulsar «2. Analizar».'],first:['Iniciar sesión de nuevo',()=>setScene('login')],second:['Volver al inicio',toMain]},
+    sesion:{tag:'RETIRAR',label:'SESIÓN',title:'No pude entrar',body:'Hospital Office o Google no dejaron entrar con la sesión disponible. Por seguridad hay que entrar de nuevo. No se perdió ni se cambió nada en el kardex.',steps:['Si el problema es Hospital Office, revisa el usuario y la contraseña guardados en Ajustes.','Si es Google, pulsa «Iniciar sesión de nuevo» y entra con la cuenta del kardex.','Vuelve a pulsar «2. Analizar».'],first:['Iniciar sesión de nuevo',()=>setScene('login')],second:['Volver al inicio',toMain]},
     kardex:{tag:'RETIRAR',label:'KARDEX',title:'No puedo abrir el kardex',body:'La app no pudo entrar al documento «KARDEX MIS PX». Puede que el enlace esté mal escrito o que tu cuenta de Google no tenga permiso para verlo.',steps:['Revisa el enlace del kardex en Ajustes.','Confirma que usaste la misma cuenta de Google al iniciar sesión.','Pide acceso al responsable del kardex si hace falta.'],first:['Revisar el enlace en Ajustes',toSet],second:['Reintentar',retry]},
     agenda:{tag:'RETIRAR',label:'AGENDA',title:'No encontré la Agenda',body:'En Hospital Office no apareció la Agenda de hoy, así que no puedo saber qué pacientes siguen hospitalizados. No se cambió nada.',steps:['Abre Hospital Office y confirma que la Agenda carga.','Revisa el enlace de la Agenda en Ajustes.','Vuelve a pulsar «2. Analizar».'],first:['Revisar el enlace de la Agenda',toSet],second:['Reintentar',retry]},
     navegador:{tag:'RETIRAR',label:'NAVEGADOR',title:'No encontré Chrome ni Brave',body:'La app necesita Google Chrome o Brave para leer la historia clínica y abrir el kardex. No se cambió nada.',steps:['Instala Google Chrome o Brave en este computador.','Cierra esta aplicación y ábrela de nuevo.','Revisa el navegador elegido en Ajustes y vuelve a pulsar «2. Analizar».'],first:['Ir a Ajustes',toSet],second:['Reintentar',retry]},
@@ -907,6 +911,17 @@ function openSettings(){
           h('div',{class:'card setcard'},h('h2',{text:'Navegador preferido'}),
             h('div',{role:'radiogroup','aria-label':'Navegador preferido',style:'display:flex;gap:12px'},radio('chrome','Chrome'),radio('brave','Brave')),
             h('div',{style:'font-size:14px;color:var(--mut);margin-top:10px',text:'Se usa para esta app, Hospital Office, el Google Doc y el inicio de sesión de Google.'})),
+          h('div',{class:'card setcard'},
+            h('div',{style:'display:flex;align-items:center;gap:10px;margin-bottom:6px'},h('h2',{style:'margin:0',text:'Hospital Office'}),tag('NONE','OPCIONAL')),
+            h('div',{id:'hoStat',style:'display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;border:1.5px solid var(--line2);background:var(--surface2);margin-bottom:12px;font-size:16px'}),
+            h('label',{class:'lbl',for:'hoUser'},'Usuario'),
+            h('input',{id:'hoUser',class:'inp',type:'text',autocomplete:'off',spellcheck:'false',style:'margin:4px 0 12px'}),
+            h('label',{class:'lbl',for:'hoPass'},'Contraseña'),
+            h('input',{id:'hoPass',class:'inp',type:'password',autocomplete:'off',style:'margin:4px 0 12px'}),
+            h('div',{style:'display:flex;gap:8px;flex-wrap:wrap'},
+              h('button',{class:'btn',type:'button',id:'hoSave',onclick:guardarHospital},'Guardar'),
+              h('button',{class:'btn',type:'button',id:'hoDel',onclick:quitarHospital},'Quitar')),
+            h('div',{style:'font-size:14px;color:var(--mut);margin-top:10px',text:'La contraseña se guarda cifrada con Windows solo para tu usuario de este computador.'})),
           h('div',{class:'card setcard'},h('h2',{text:'Apariencia'}),h('button',{class:'btn',type:'button',id:'setTheme',onclick:toggleTheme}))),
         h('div',{style:'display:flex;flex-direction:column;gap:14px'},
           h('div',{class:'card setcard'},h('h2',{style:'margin-bottom:4px',text:'Especialistas'}),
@@ -939,6 +954,13 @@ function renderSettingsDyn(){
   clear(b);
   b.appendChild(h('button',{class:'btn',type:'button',onclick:()=>$('credFile').click()},ok?'Cambiar archivo de credenciales…':'Elegir archivo de credenciales…'));
   if(ok)b.appendChild(h('button',{class:'btn',type:'button',onclick:quitarCred},'Quitar credenciales'));
+  const hs=$('hoStat');
+  if(hs){
+    clear(hs);
+    hs.appendChild(h('span',{'aria-hidden':'true',style:'font-weight:700',text:E.hospital_guardado?'✓':'○'}));
+    hs.appendChild(h('span',{style:'flex:1;font-weight:700',text:E.hospital_guardado?'Guardado para '+E.hospital_usuario:'Sin guardar: tendrás que iniciar sesión tú en cada análisis'}));
+    $('hoDel').hidden=!E.hospital_guardado;
+  }
   const t=$('setTheme');if(t)t.textContent=themeNow()==='dark'?'Modo claro':'Modo oscuro';
 }
 function onCredFile(ev){
@@ -952,6 +974,17 @@ function onCredFile(ev){
   };
   rd.onerror=()=>{say('No se pudo leer el archivo.');};
   rd.readAsText(f);
+}
+async function guardarHospital(){
+  const u=$('hoUser').value.trim(),c=$('hoPass').value;
+  if(!u||!c){say('Escribe el usuario y la contraseña de Hospital Office.');return;}
+  const r=await call('/api/hospital',{usuario:u,clave:c});
+  if(r.ok){$('hoPass').value='';$('hoUser').value='';}
+  say(r.ok?'Usuario de Hospital Office guardado.':(r.data.mensaje||'No se pudo guardar el usuario.'));poll();
+}
+async function quitarHospital(){
+  const r=await call('/api/hospital/quitar',{});
+  say(r.ok?'Usuario de Hospital Office quitado.':(r.data.mensaje||'No se pudo quitar el usuario.'));poll();
 }
 async function quitarCred(){
   const r=await call('/api/credenciales/quitar',{});
@@ -973,6 +1006,7 @@ $('setBtn').addEventListener('click',()=>{closeConfirmIf();setScene('settings');
 function closeConfirmIf(){if(S.dlg)closeConfirm();}
 $('bLogin').addEventListener('click',goLogin);
 $('bAnalyze').addEventListener('click',doAnalyze);
+$('hoLink').addEventListener('click',()=>setScene('settings'));
 $('bWrite').addEventListener('click',goWrite);
 $('bCopy').addEventListener('click',copyNew);
 $('kurl').addEventListener('blur',saveKardexUrl);

@@ -1,20 +1,24 @@
 """Ejecuta flujo.analizar de verdad (Playwright + Chromium sin ventana) contra el simulador de
 Hospital Office y del kardex (tests/simulador). Se salta si no hay playwright o Chromium."""
+import time
+
 import pytest
 
 import flujo
+import sistema
 from chromium_pruebas import disponible
 from errores import ErrorApp
-from simulador.servidor import Simulador
+from simulador.servidor import CLAVE, USUARIO, Simulador
 
 CHROMIUM = disponible()
 pytestmark = pytest.mark.skipif(CHROMIUM is None, reason="falta playwright o Chromium")
 
 
 @pytest.fixture(autouse=True)
-def navegador_de_prueba(monkeypatch):
+def navegador_de_prueba(monkeypatch, datos_temporales):
     monkeypatch.setenv("KARDEX_CHROME", CHROMIUM)
     monkeypatch.setenv("KARDEX_HEADLESS", "1")
+    flujo.hospital_guardar(USUARIO, CLAVE)          # por defecto la app entra sola
 
 
 def _cfg(sim):
@@ -102,12 +106,101 @@ def test_cancelar_se_revisa_antes_de_cada_paciente():
             _analizar(sim, cancelado)
 
 
-@pytest.mark.parametrize("modo", ["redirigir", "en_pagina"])
-def test_login_falso_produce_error_de_sesion(modo):
-    with Simulador(modo_login=modo) as sim:
+def test_login_automatico_con_credenciales_correctas():
+    with Simulador() as sim:
+        (pacientes, _, _), registro, avance = _analizar(sim)
+        assert sim.logins == 1
+    assert len(pacientes) == 6 and len(avance) == 5
+    assert not any(CLAVE in linea for linea in registro)
+
+
+def test_credenciales_malas_dan_error_de_sesion_sin_la_clave_en_el_diagnostico(datos_temporales):
+    flujo.hospital_guardar(USUARIO, "Otra-Clave-Mala-999")
+    with Simulador() as sim:
+        registro = []
         with pytest.raises(ErrorApp) as e:
-            _analizar(sim)
-    assert e.value.codigo == "sesion"
+            flujo.analizar(_cfg(sim), registro.append, lambda *a: None, lambda: False)
+        assert sim.logins == 0
+    assert e.value.codigo == "sesion" and e.value.mensaje.startswith("Usuario o contraseña de Hospital Office no válidos")
+    assert flujo.hospital_credenciales() is None          # se borran para no bloquear la cuenta
+    archivos = list((datos_temporales / "diagnostico").glob("*"))
+    assert any(a.suffix == ".html" for a in archivos) and any(a.suffix == ".png" for a in archivos)
+    for a in archivos:
+        if a.suffix == ".html":
+            assert "Otra-Clave-Mala-999" not in a.read_text(encoding="utf-8")
+    assert not any("Otra-Clave-Mala-999" in linea for linea in registro)
+
+
+def test_sin_credenciales_espera_a_que_la_persona_inicie_sesion(monkeypatch, datos_temporales):
+    flujo.hospital_quitar()
+    ctxs = []
+    real = sistema.abrir_contexto
+    monkeypatch.setattr(sistema, "abrir_contexto", lambda *a, **k: ctxs.append(real(*a, **k)) or ctxs[-1])
+    hecho = {"t0": None, "login": False}
+
+    def cancelado():              # se llama desde el mismo hilo de Playwright: aquí «la persona» entra
+        if hecho["t0"] is None and any("te espero" in m for m in registro):
+            hecho["t0"] = time.monotonic()
+        if hecho["t0"] and not hecho["login"] and time.monotonic() - hecho["t0"] > 2:
+            hecho["login"] = True
+            pg = ctxs[0].pages[0]
+            pg.fill("input[type=text]", USUARIO)
+            pg.fill("input[type=password]", CLAVE)
+            pg.click("text=Ingresar")
+        return False
+    registro, avance, esperas = [], [], []
+    with Simulador() as sim:
+        (pacientes, _, _) = flujo.analizar(
+            _cfg(sim), registro.append, lambda i, n, nombre: (esperas if i == 0 else avance).append((i, n, nombre)),
+            cancelado)[0:3]
+    assert hecho["login"] and len(pacientes) == 6 and len(avance) == 5
+    assert esperas == [(0, 0, "Esperando inicio de sesión…")]
+
+
+def test_sin_credenciales_se_puede_cancelar_la_espera(datos_temporales):
+    from errores import Cancelado
+    flujo.hospital_quitar()
+    with Simulador() as sim:
+        n = []
+
+        def cancelado():
+            n.append(1)
+            return len(n) > 2
+        with pytest.raises(Cancelado):
+            _analizar(sim, cancelado)
+
+
+def test_sesion_que_vence_a_mitad_se_vuelve_a_iniciar():
+    with Simulador(vence_tras=12) as sim:
+        (pacientes, _, acciones), registro, avance = _analizar(sim)
+        assert sim.logins == 2                      # el segundo login es el re-login
+    por = {p.nombre: p for p in pacientes}
+    assert all(p.encontrado_detalle for p in pacientes if p.nombre in
+               {"ALVARADO RUIZ PEDRO PABLO", "BENAVIDES LUNA SOFIA", "CORREA MEJIA TOMAS",
+                "DUQUE SALAS MARIA ELENA", "GUTIERREZ OSORIO LAURA"}), [p.aviso for p in por.values()]
+    assert len(avance) == 5
+
+
+def test_navegacion_por_menu_principal_y_atencion_de_pacientes():
+    with Simulador() as sim:
+        (pacientes, _, _), _, _ = _analizar(sim)
+        assert any(s["menu"] for s in sim.sesiones.values())     # pasó por /Menu.aspx
+    assert len(pacientes) == 6
+
+
+def test_agenda_directa_sin_menu_no_basta_y_sin_enlaces_es_error_de_agenda():
+    # el simulador ya no entrega la Agenda sin pasar por el menú; si el menú no existe, error «agenda»
+    with Simulador() as sim:
+        sim.agenda_requiere_menu = True
+        import simulador.servidor as m
+        original = m.MENU
+        m.MENU = "<html><body><h1>Menú vacío</h1></body></html>"
+        try:
+            with pytest.raises(ErrorApp) as e:
+                _analizar(sim)
+        finally:
+            m.MENU = original
+    assert e.value.codigo == "agenda"
 
 
 def test_kardex_inaccesible_produce_error_kardex():
@@ -120,7 +213,8 @@ def test_kardex_inaccesible_produce_error_kardex():
 
 def test_fallo_de_agenda_en_un_paciente_no_aborta_el_analisis():
     # visitas 1 y 2: listado (Urgencias / Hospitalización); visita 3: la Agenda de ALVARADO (el primero del kardex)
-    with Simulador(agenda_rota_en=[3]) as sim:
+    # (ir_agenda se recupera una vez: la segunda visita también está rota para que el paciente falle)
+    with Simulador(agenda_rota_en=[3, 4]) as sim:
         (pacientes, _, acciones), registro, avance = _analizar(sim)
     por = {p.nombre: p for p in pacientes}
     assert "No pude leer su historia" in por["ALVARADO RUIZ PEDRO PABLO"].aviso
@@ -144,7 +238,7 @@ def _sesion(sim, **kw):
 
 
 def test_iniciar_sesion_detecta_hospital_y_termina_con_terminar():
-    with Simulador() as sim:
+    with Simulador(exige_login=False, agenda_requiere_menu=False) as sim:
         llamadas = []
 
         def terminar():
@@ -155,7 +249,7 @@ def test_iniciar_sesion_detecta_hospital_y_termina_con_terminar():
 
 
 def test_iniciar_sesion_con_login_no_cuenta_hospital():
-    with Simulador(modo_login="redirigir") as sim:
+    with Simulador() as sim:
         llamadas = []
 
         def terminar():
