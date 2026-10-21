@@ -1,4 +1,5 @@
 """Orquesta las tareas que lanza la interfaz (se ejecutan en un hilo aparte)."""
+import copy
 import json
 import os
 import time
@@ -8,15 +9,30 @@ from pathlib import Path
 import kardex_doc
 import navegador
 import secreto
-from comparar import Accion, buscar_paciente, comparar, modo_preferido, MODOS_AGENDA
+from comparar import Accion, buscar_paciente, candidatos_cirugia, comparar, modo_preferido, MODOS_AGENDA
 from errores import Cancelado, ErrorApp
 
 NOMBRE = "Actualizar Kardex"
+_DOC = "https://docs.google.com/document/d/"
 CONFIG_BASE = {
-    "url_kardex": "https://docs.google.com/document/d/1Zd2RCwl-KifgPpmm8DiGRJKSxzjDYFlo74NifzHWFA0/edit",
+    "url_kardex": _DOC + "1Zd2RCwl-KifgPpmm8DiGRJKSxzjDYFlo74NifzHWFA0/edit",
     "url_agenda": "https://appclinicareinacatalina.com.co:8090/ehc2013/historiasclinicas/Agenda.aspx",
     "especialistas": ["DAZA", "FABIAN", "EMILIANI"],
     "navegador": "chrome",
+    # documentos «ENTREGAS CRC» (uno por servicio): SOLO se leen, nunca se escriben
+    "entregas": [
+        {"nombre": "PISO 3 GINECO", "url": _DOC + "1Tl8MZhfT3EXsr2iXXJX2ZEJDe8Krrx-yahen7HXRW_U/edit"},
+        {"nombre": "PISO 4C (401-421)", "url": _DOC + "13qS3NFNW6rL4WdMyrRwemWiEBs1klmHRBG_NRnFuGxI/edit"},
+        {"nombre": "PISO 4A (422-430)", "url": _DOC + "1aNLMA35809TyPxdpzrYSmGGC671TCCxcdpehxikjtEs/edit"},
+        {"nombre": "PISO 4B (430 EN ADELANTE)", "url": _DOC + "1JLpYjbFaX0Ig1STPvXmwretUrr4hku91N4id6TnHTJA/edit"},
+        {"nombre": "PISO 5", "url": _DOC + "1SrIrfFb7LGtlIFvTIVrtZqLzdn18C4a3Nc5L9gLCYxE/edit?tab=t.0"},
+        {"nombre": "PISO 6", "url": _DOC + "1OkIz3Nk416MfJ-8RiZ5MbJ_6Zfdh1v5c2_j94R0LPik/edit"},
+        {"nombre": "PISOS 10 Y 11", "url": _DOC + "1NnrOurx4ts6vThhqxMxonqRvfcwE8O6lf14UJADDaVM/edit?tab=t.0"},
+        {"nombre": "URGENCIAS CARRERA 47", "url": _DOC + "1wpDe8-sfVb8JRqjNhLVuLDDRw2xqf2nkkmoLFLFkAvY/edit?tab=t.0"},
+        {"nombre": "URGENCIAS CALLE 82", "url": _DOC + "1oZ6csCNXcoT-lAaGGRa7gujmBg9kUP4Y6BiFdpomF_8/edit"},
+        {"nombre": "UCI 1", "url": _DOC + "1_uf1Ga_-Uzygws2GwLhmYpMhnZYcRmAbySa6bOel_uM/edit"},
+        {"nombre": "UCI 7", "url": _DOC + "1DSL2Wy5TtSZi1D1TB_JQOno31sk_kVx_ocxcL-DLhHY/edit"},
+    ],
 }
 
 
@@ -31,7 +47,7 @@ def carpeta_datos():
 
 def cargar_config():
     f = carpeta_datos() / "config.json"
-    cfg = dict(CONFIG_BASE)
+    cfg = copy.deepcopy(CONFIG_BASE)
     if f.exists():
         try:
             cfg.update(json.loads(f.read_text(encoding="utf-8")))
@@ -39,6 +55,8 @@ def cargar_config():
             pass
     if cfg.get("navegador") not in navegador.NOMBRES:
         cfg["navegador"] = "chrome"
+    if not isinstance(cfg.get("entregas"), list):
+        cfg["entregas"] = copy.deepcopy(CONFIG_BASE["entregas"])
     return cfg
 
 
@@ -207,9 +225,73 @@ def analizar(nav, cfg, log, progreso, cancelado):
     return nav.ejecutar(_analizar, cfg, log, progreso, cancelado)
 
 
+def _documentos_entregas(cfg):
+    """Documentos de entregas configurados ([{nombre, url}]); ignora las entradas mal formadas."""
+    docs = []
+    for e in cfg.get("entregas") or []:
+        if isinstance(e, dict) and isinstance(e.get("nombre"), str) and isinstance(e.get("url"), str) \
+                and e["nombre"].strip() and e["url"].strip():
+            docs.append({"nombre": e["nombre"].strip(), "url": e["url"].strip()})
+    return docs
+
+
+def _leer_entregas(ctx, cfg, log, cancelado):
+    """Lee (SOLO lectura) cada documento de entregas con la sesión de Google del navegador.
+    Devuelve (entradas: list[PacienteEntrega], fallidos: [(nombre del documento, motivo)]). Un documento que no se
+    puede leer se anota y se sigue con los demás; un error de sesión de Google sí corta el análisis."""
+    entradas, fallidos = [], []
+    docs = _documentos_entregas(cfg)
+    if docs:
+        log(f"Leyendo {len(docs)} documentos de entregas…")
+    for d in docs:
+        if cancelado():
+            raise Cancelado()
+        try:
+            filas = kardex_doc.parsear_entregas_html(kardex_doc.descargar_html(ctx, d["url"]), d["nombre"])
+        except Cancelado:
+            raise
+        except ErrorApp as e:
+            if e.codigo == "sesion":
+                raise
+            motivo = e.mensaje.split(". ")[0]       # sin la sugerencia «revisa el enlace del KARDEX»
+        except Exception as e:  # noqa: BLE001
+            motivo = _motivo(e)
+        else:
+            log(f"  Entregas {d['nombre']}: {len(filas)} pacientes")
+            entradas += filas
+            continue
+        log(f"  No pude leer las entregas {d['nombre']}: {motivo}")
+        fallidos.append((d["nombre"], motivo))
+    return entradas, fallidos
+
+
+def _buscar(s, nombre, documento, tipo, servicio, tratamiento, edad=""):
+    """Busca un paciente en la Agenda (el modo del servicio primero, luego el otro). PacienteSistema todavía sin
+    detalle (con la base de «IGUAL MANEJO» y la edad), o None si no aparece."""
+    pref = modo_preferido(servicio)
+    p = s.buscar(nombre, documento, tipo, [pref] + [m for m in MODOS_AGENDA if m != pref])
+    if not p:
+        return None
+    p.tratamiento = tratamiento         # base para «IGUAL MANEJO» (vacía en los pacientes que no están en el kardex)
+    if edad:
+        p.edad = edad
+    return p
+
+
+def _mismo(p, pacientes):
+    """Ya hay en `pacientes` una persona con el mismo documento o el mismo nombre."""
+    return any((p.documento and x.documento == p.documento) or x.nombre == p.nombre for x in pacientes)
+
+
+def _motivo(e):
+    """Primer renglón del error (o su nombre si no trae texto)."""
+    return str(e).splitlines()[0] if str(e) else e.__class__.__name__
+
+
 def _analizar(ctx, cfg, log, progreso, cancelado):
     import sistema
     antes = list(ctx.pages)
+    fallidos, fallidos_nuevos, nuevos, docs_fallidos = [], [], [], []
     try:
         log("Leyendo el kardex…")
         html = kardex_doc.descargar_html(ctx, cfg["url_kardex"])
@@ -219,29 +301,35 @@ def _analizar(ctx, cfg, log, progreso, cancelado):
             raise ErrorApp("kardex", "El documento no trae ninguna tabla con encabezado DATOS "
                                      f"(tablas encontradas: {n}; primera celda de la primera tabla: «{primera}»). "
                                      "Revisa que el enlace sea el del KARDEX y la pestaña correcta.")
+        tablas = kardex_doc.tablas_kardex(html)
         log(f"Kardex: {len(kardex)} pacientes")
+        # documentos de entregas: de ahí salen los pacientes con valoración por cirugía general que no están en el kardex
+        entradas, docs_fallidos = _leer_entregas(ctx, cfg, log, cancelado)
+        candidatos = candidatos_cirugia(entradas)
+        # los que ya están en el kardex se actualizan con su fila; solo se buscan los demás
+        nuevos_cand = [e for e in candidatos if not buscar_paciente(e.nombre, e.documento, kardex)]
+        if entradas:
+            log(f"Entregas: {len(candidatos)} pacientes con valoración por cirugía general, "
+                f"{len(nuevos_cand)} que no están en el kardex")
         s = sistema.Sistema(ctx, cfg, log, carpeta_datos() / "diagnostico",
                             credenciales=hospital_credenciales(), progreso=progreso, cancelado=cancelado,
                             pagina=_pestana(ctx, "hospital"))
         log("Leyendo la Agenda de Hospital Office…")
         s.ir_agenda()                       # aquí falla (sesión / agenda) si no se puede entrar
-        pacientes, fallidos = [], []
-        n = len(kardex)
+        pacientes = []
+        n = len(kardex) + len(nuevos_cand)
         for i, f in enumerate(kardex, 1):
             if cancelado():
                 raise Cancelado()
             progreso(i, n, f.nombre)
             log(f"({i}/{n}) {f.nombre}")
             try:
-                pref = modo_preferido(f.servicio)
-                modos = [pref] + [m for m in MODOS_AGENDA if m != pref]
-                p = s.buscar(f.nombre, f.documento, f.tipo_documento, modos)
+                p = _buscar(s, f.nombre, f.documento, f.tipo_documento, f.servicio, f.tratamiento)
                 if not p:
                     log("  no aparece en el sistema")
                     continue
-                if any((p.documento and x.documento == p.documento) or x.nombre == p.nombre for x in pacientes):
+                if _mismo(p, pacientes):
                     continue                       # dos filas del kardex para la misma persona
-                p.tratamiento = f.tratamiento      # base para «IGUAL MANEJO»
                 s.detalle(p)
                 pacientes.append(p)
             except Cancelado:
@@ -252,27 +340,34 @@ def _analizar(ctx, cfg, log, progreso, cancelado):
                 fallidos.append((f, e.mensaje))
                 s.diagnostico("buscar")
             except Exception as e:  # noqa: BLE001
-                fallidos.append((f, str(e).splitlines()[0] if str(e) else e.__class__.__name__))
+                fallidos.append((f, _motivo(e)))
                 s.diagnostico("buscar")
-        # AGREGAR: solo desde la lista de atendidos (si existe). La grilla «Pacientes Por Atender» es de TODO
-        # el hospital: nunca se usa para proponer pacientes nuevos.
-        try:
-            atendidos = s.leer_atendidos()
-        except ErrorApp as e:
-            if e.codigo == "sesion":
+        for i, e in enumerate(nuevos_cand, len(kardex) + 1):
+            if cancelado():
+                raise Cancelado()
+            progreso(i, n, e.nombre)
+            log(f"({i}/{n}) {e.nombre} (entregas {e.doc})")
+            try:
+                p = _buscar(s, e.nombre, e.documento, e.tipo_documento, e.doc, "", e.edad)
+                if not p:
+                    log("  no aparece en el sistema")
+                    continue
+                if _mismo(p, pacientes):
+                    log("  ya está en el análisis con otra fila del kardex")
+                    continue
+                s.detalle(p)
+                pacientes.append(p)
+                nuevos.append((p, e))
+            except Cancelado:
                 raise
-            atendidos = []
-        except Cancelado:
-            raise
-        except Exception:  # noqa: BLE001
-            atendidos = []
-        if not atendidos:
-            log("No hay lista de pacientes atendidos: no se proponen pacientes nuevos")
-        for a in atendidos:
-            if any(buscar_paciente(f.nombre, f.documento, [a]) for f in kardex):
-                continue
-            if not any(x.documento and x.documento == a.documento or x.nombre == a.nombre for x in pacientes):
-                pacientes.append(a)
+            except ErrorApp as err:
+                if err.codigo == "sesion":
+                    raise
+                fallidos_nuevos.append((e, err.mensaje))
+                s.diagnostico("buscar")
+            except Exception as err:  # noqa: BLE001
+                fallidos_nuevos.append((e, _motivo(err)))
+                s.diagnostico("buscar")
         log(f"Sistema: {len(pacientes)} pacientes")
     except ErrorApp as e:
         if e.codigo == "sesion" and e.mensaje.startswith(sistema.Sistema.MSG_LOGIN_MALO):
@@ -284,18 +379,27 @@ def _analizar(ctx, cfg, log, progreso, cancelado):
     finally:
         _cerrar_pestanas_sobrantes(ctx, antes)      # el navegador y la pestaña de Hospital Office quedan abiertos
     perdidos = {id(f) for f, _ in fallidos}
-    acciones = comparar(pacientes, [f for f in kardex if id(f) not in perdidos])
+    acciones = comparar(pacientes, [f for f in kardex if id(f) not in perdidos], nuevos=nuevos, tablas=tablas,
+                        entregas=entradas)
     for f, motivo in fallidos:          # no se pudo buscar: no es lo mismo que «no aparece»
         acciones.append(Accion("REVISAR", f.nombre, detalle=f"No pude buscarlo en el sistema: {motivo}", fila=f,
                                marcada=False, servicio=f.servicio, habitacion=f.habitacion))
+    for e, motivo in fallidos_nuevos:   # está en las entregas con cirugía pero no pude revisarlo en el sistema
+        acciones.append(Accion("REVISAR", e.nombre, detalle=f"Está en las entregas ({e.doc}) con valoración por "
+                                                            f"cirugía y no pude buscarlo en el sistema: {motivo}",
+                               marcada=False, servicio=e.servicio or e.doc, habitacion=e.habitacion))
+    for nombre, motivo in docs_fallidos:
+        acciones.append(Accion("REVISAR", nombre, detalle=f"No pude leer el documento de entregas {nombre}: {motivo}",
+                               marcada=False))
     return pacientes, kardex, acciones
 
 
 def aplicar(cfg, acciones, log):
-    """Escribe en el Google Doc. Devuelve (escritas, omitidas) como en kardex_doc.aplicar."""
+    """Escribe en el Google Doc (ACTUALIZAR, AGREGAR y MOVER aprobados). Devuelve (escritas, omitidas) como en
+    kardex_doc.aplicar. Los documentos de entregas nunca se escriben."""
     servicio = kardex_doc.servicio_docs(carpeta_datos(), _preferido(cfg))
     escritas, omitidas = kardex_doc.aplicar(servicio, cfg["url_kardex"], acciones)
-    log(f"Escritas {len(escritas)} celdas.")
+    log(f"Escritos {len(escritas)} cambios en el kardex.")
     for a, motivo in omitidas:
-        log(f"Omitida: {a.paciente} ({a.campo}): {motivo}")
+        log(f"Omitida: {a.paciente} ({a.campo or a.tipo}): {motivo}")
     return escritas, omitidas

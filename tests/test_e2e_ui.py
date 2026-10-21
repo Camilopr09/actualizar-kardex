@@ -137,7 +137,7 @@ def test_recorrido_completo(app, tmp_path):
         # ---- Un análisis cancelado no deja resultado
         page.click("#bAnalyze")
         expect(page.locator("#sc-analyzing")).to_be_visible()
-        expect(page.locator("#sc-analyzing")).to_contain_text(re.compile(r"\(\d+/29\)"))
+        expect(page.locator("#sc-analyzing")).to_contain_text(re.compile(r"\(\d+/32\)"))
         foto(page, "04-analizando")
         page.get_by_role("button", name="Cancelar").click()
         expect(page.locator("#sc-main")).to_be_visible()
@@ -149,6 +149,9 @@ def test_recorrido_completo(app, tmp_path):
         page.click("#bAnalyze")
         expect(page.locator("#sc-result")).to_be_visible(timeout=30000)
         expect(page.get_by_role("heading", name="Resultado del análisis")).to_be_visible()
+        expect(page.locator("#sc-result")).to_contain_text("cambios por escribir")
+        for tipo in ("ACTUALIZAR", "AGREGAR", "MOVER", "RETIRAR", "REVISAR"):      # la leyenda trae los cinco tipos
+            expect(page.locator("#sc-result")).to_contain_text(tipo)
         foto(page, "05-resultado")
         page.get_by_role("button", name="Revisar y aprobar cambios →").click()
         expect(page.locator("#sc-main")).to_be_visible()
@@ -171,6 +174,67 @@ def test_recorrido_completo(app, tmp_path):
         expect(page.locator("#cmpNew")).to_contain_text("No aparece en el sistema")
         page.select_option("#typeF", "AGREGAR")
         expect(page.locator("#cmpOld")).to_contain_text("No está en el kardex")
+
+        # ---- AGREGAR: fila nueva por columnas en la tabla destino; sin tabla destino no se puede marcar
+        filas = page.locator("#panel .row")
+        expect(filas).to_have_count(3)
+        expect(page.locator("#cmpTag")).to_contain_text("AGREGAR")
+        expect(page.locator("#cmpWho")).to_contain_text("Fila nueva en PISO 6")
+        expect(page.locator("#cmpNew .colh")).to_have_text(["DATOS", "DX", "EVOLUCIÓN", "TRATAMIENTO", "IMÁGENES / NOTAS"])
+        expect(page.locator("#cmpNew")).to_contain_text("IBAÑEZ ROMERO JUAN CAMILO")
+        expect(page.locator("#cmpNew")).to_contain_text("ECOGRAFÍA VÍAS BILIARES Y PÁNCREAS 18/10/26")
+        expect(filas.nth(0).locator("input[data-cb]")).to_be_checked()
+        filas.nth(1).locator(".rbtn").click()
+        expect(page.locator("#cmpWho")).to_contain_text("Fila nueva en URGENCIAS 47")
+        expect(filas.nth(1).locator("input[data-cb]")).to_be_checked()
+        filas.nth(2).locator(".rbtn").click()
+        expect(page.locator("#cmpWho")).to_contain_text("agrégala a mano")
+        expect(page.locator("#cmpNew")).to_contain_text("BELTRAN SANCHEZ OMAR JULIAN")
+        expect(filas.nth(2).locator("input[data-cb]")).to_be_disabled()
+        expect(filas.nth(2).locator("input[data-cb]")).not_to_be_checked()
+        foto(page, "06b-agregar")
+
+        # ---- MOVER: glifo y color propios (claro y oscuro), «De X a Y · habitación», marcado por defecto
+        page.select_option("#typeF", "MOVER")
+        expect(filas).to_have_count(2)
+        expect(page.locator("#cmpTag")).to_contain_text("MOVER")
+        filas.filter(has_text="ACOSTA").locator(".rbtn").click()
+        expect(page.locator("#cmpWho")).to_contain_text("De PISO 6 a PISO 5 · habitación 512")
+        expect(page.locator("#cmpOld")).to_contain_text("PISO 6 · 601")
+        expect(page.locator("#cmpNew")).to_contain_text("PISO 5 · 512")
+        expect(filas.filter(has_text="ACOSTA").locator("input[data-cb]")).to_be_checked()
+        expect(filas.filter(has_text="SIERRA").locator(".rbtn")).to_contain_text("PISO 4C")      # 405 está en 401 - 421
+        etiqueta = page.locator("#panel .tag[data-t=MOVER]").first
+        expect(etiqueta).to_contain_text("→")
+        claro = etiqueta.evaluate("e=>getComputedStyle(e).color")
+        page.click("#themeBtn")
+        oscuro = etiqueta.evaluate("e=>getComputedStyle(e).color")
+        foto(page, "06c-mover-oscuro")
+        page.click("#themeBtn")
+        assert (claro, oscuro) == ("rgb(90, 42, 156)", "rgb(213, 189, 255)")
+
+        # ---- ACTUALIZAR «IMÁGENES / NOTAS»: la celda completa, con lo que se agrega subrayado
+        page.select_option("#typeF", "ACTUALIZAR")
+        page.fill("#q", "imágenes")
+        expect(filas).to_have_count(2)
+        insertar = next(a["insertar"] for a in res["acciones"] if a["campo"] == "IMÁGENES / NOTAS" and "CARDENAS" in a["paciente"])
+        filas.filter(has_text="CARDENAS").locator(".rbtn").click()
+        expect(page.locator("#cmpOld")).to_contain_text("TAC DE ABDOMEN SIMPLE 16/10/26")
+        assert page.locator("#cmpOld .d-del").count() == 0                       # no se quita nada
+        assert page.locator("#cmpNew .d-add").count() == 1 and page.locator("#cmpNew .d-add").text_content() == insertar
+        assert page.locator("#cmpNew").text_content().startswith("IMÁGENES\n" + insertar)    # debajo del subtítulo
+        assert "TAC DE ABDOMEN SIMPLE 16/10/26" in page.locator("#cmpNew").text_content()
+        filas.filter(has_text="FONSECA").locator(".rbtn").click()                  # celda vacía
+        expect(page.locator("#cmpOld")).to_contain_text("Celda vacía")
+        expect(page.locator("#cmpNew .d-add")).to_contain_text("RADIOGRAFÍA TÓRAX PA Y LATERAL 18/10/26")
+        # ---- ACTUALIZAR «HABITACIÓN»: Ahora / Nuevo
+        page.fill("#q", "habitación")
+        expect(filas).to_have_count(1)
+        expect(page.locator("#cmpTag")).to_contain_text("ACTUALIZAR")
+        expect(page.locator("#cmpOld")).to_contain_text("302")
+        expect(page.locator("#cmpNew")).to_contain_text("306")
+        assert page.locator("#cmpOld .d-del").count() == 1 and page.locator("#cmpNew .d-add").count() == 1
+        page.fill("#q", "")
         page.select_option("#typeF", "ALL")
         expect(page.locator("#panel .row")).to_have_count(n_act)
         palabra = res["acciones"][0]["paciente"].split()[0]
@@ -238,9 +302,9 @@ def test_recorrido_completo(app, tmp_path):
         page.locator("#allCb").uncheck()
         assert not any(cbs.nth(i).is_checked() for i in range(len(auto)))
         page.click("#bWrite")
-        expect(page.locator("#toast")).to_contain_text("Marca al menos una celda")
+        expect(page.locator("#toast")).to_contain_text("Marca al menos un cambio")
         page.click("#bCopy")
-        expect(page.locator("#toast")).to_contain_text("Marca al menos una celda")
+        expect(page.locator("#toast")).to_contain_text("Marca al menos un cambio")
         page.locator("#allCb").check()
 
         # ---- El texto escrito sobrevive a los sondeos (3 s sin tarea)
@@ -262,13 +326,23 @@ def test_recorrido_completo(app, tmp_path):
         expect(page.locator("#toast")).to_contain_text("Texto nuevo copiado")
         portapapeles = page.evaluate("navigator.clipboard.readText()")
         assert " · " in portapapeles and "\n\n" in portapapeles
-        assert portapapeles.split("\n")[0].split(" · ")[1] in ("DX", "EVOLUCIÓN", "TRATAMIENTO")
+        assert portapapeles.split("\n")[0].split(" · ")[1] in ("DX", "EVOLUCIÓN", "TRATAMIENTO", "IMÁGENES / NOTAS")
+        assert f"Texto nuevo copiado: {len(auto)} cambios" in page.locator("#toast").text_content()
+        assert "IBAÑEZ ROMERO JUAN CAMILO · Fila nueva\nDATOS\n611\nIBAÑEZ ROMERO JUAN CAMILO" in portapapeles
+        assert "ACOSTA RIVERA LUIS ALBERTO · HABITACIÓN\nPISO 5 · 512" in portapapeles
+        assert portapapeles.startswith("CARDENAS IBARRA JORGE ENRIQUE · IMÁGENES / NOTAS\n" + insertar)   # solo lo que se agrega
+        assert "TAC DE ABDOMEN SIMPLE" not in portapapeles
 
         # ---- Confirmar y escribir
         page.click("#bWrite")
         dlg = page.get_by_role("dialog")
         expect(dlg).to_be_visible()
-        expect(dlg).to_contain_text(f"Se escribirán {len(auto)} celdas")
+        expect(dlg).to_contain_text(f"Se escribirán {len(auto)} cambios")
+        expect(dlg).to_contain_text("2 · filas nuevas")
+        expect(dlg).to_contain_text("2 · cambios de piso")
+        expect(dlg).to_contain_text("IMÁGENES / NOTAS")
+        expect(dlg).to_contain_text("RETIRAR y REVISAR se hacen a mano")
+        assert dlg.locator(".tag[data-t=AGREGAR]").count() == 1 and dlg.locator(".tag[data-t=MOVER]").count() == 1
         foto(page, "10-confirmar")
         page.keyboard.press("Escape")
         expect(dlg).to_be_hidden()
@@ -278,7 +352,10 @@ def test_recorrido_completo(app, tmp_path):
         expect(page.get_by_role("heading", name="Escritura terminada")).to_be_visible()
         expect(page.locator("#sc-done")).to_contain_text("Omitidas (1)")
         expect(page.locator("#sc-done")).to_contain_text("La fila cambió")
-        expect(page.locator("#sc-done")).to_contain_text(f"Celdas escritas ({len(auto) - 1})")
+        expect(page.locator("#sc-done")).to_contain_text(f"Cambios escritos ({len(auto) - 1})")
+        for texto in ("Fila nueva en PISO 6", "Fila nueva en URGENCIAS 47", "Cambio de piso a PISO 5",
+                      "Cambio de piso a PISO 4C", "IMÁGENES / NOTAS", "HABITACIÓN"):
+            expect(page.locator("#sc-done")).to_contain_text(texto)
         foto(page, "11-escritura-terminada")
         page.get_by_role("button", name="Abrir el kardex").click()
         page.get_by_role("button", name="Volver al inicio").click()
@@ -316,6 +393,32 @@ def test_recorrido_completo(app, tmp_path):
         expect(page.locator("#chips")).to_contain_text("PEREZ")
         page.get_by_role("button", name="Quitar a DAZA").click()
         expect(page.locator("#chips")).not_to_contain_text("DAZA")
+        # documentos de entregas (solo lectura): lista editable de nombre + enlace
+        expect(page.locator("#sc-settings")).to_contain_text("Documentos de entregas")
+        expect(page.locator("#sc-settings")).to_contain_text("SOLO LECTURA")
+        nombres = page.locator("#entList input[data-ent=nombre]")
+        enlaces = page.locator("#entList input[data-ent=url]")
+        expect(nombres).to_have_count(11)
+        expect(nombres.first).to_have_value("PISO 3 GINECO")
+        expect(enlaces.first).to_have_value(est["config"]["entregas"][0]["url"])
+        expect(page.locator("#entCount")).to_contain_text("11 documentos")
+        page.locator("#entAdd").scroll_into_view_if_needed()
+        foto(page, "12b-ajustes-entregas")
+        page.get_by_role("button", name="Quitar el documento UCI 7").click()
+        expect(nombres).to_have_count(10)
+        page.get_by_role("button", name="Agregar documento").click()
+        expect(nombres).to_have_count(11)
+        assert page.evaluate("document.activeElement.getAttribute('data-ent')") == "nombre"      # el cursor queda en la fila nueva
+        nombres.last.fill("PISO 8")
+        page.get_by_role("button", name="Guardar ajustes").click()                               # falta el enlace
+        expect(page.locator("#toast")).to_contain_text("Documento de entregas 11: escribe el nombre y el enlace")
+        enlaces.last.fill("https://ejemplo.com/document/d/abc123")
+        page.get_by_role("button", name="Guardar ajustes").click()                               # el servidor lo rechaza
+        expect(page.locator("#toast")).to_contain_text("el enlace debe ser de un Google Doc")
+        esperadas_4xx.append("/api/config")
+        assert len(_api(app, "/api/estado")["config"]["entregas"]) == 11
+        assert "PISO 8" not in json.dumps(_api(app, "/api/estado")["config"]["entregas"])       # no se guardó nada
+        enlaces.last.fill("https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-aBcDe/edit")
         # credenciales: archivo inválido, válido y quitar
         malo = tmp_path / "malo.json"
         malo.write_text('{"otra": 1}')
@@ -355,12 +458,18 @@ def test_recorrido_completo(app, tmp_path):
         expect(page.locator("#toast")).to_contain_text("Ajustes guardados")
         cfg = _api(app, "/api/estado")["config"]
         assert cfg["navegador"] == "chrome" and cfg["especialistas"] == ["FABIAN", "EMILIANI", "PEREZ"]
+        assert [d["nombre"] for d in cfg["entregas"]] == [d["nombre"] for d in est["config"]["entregas"] if d["nombre"] != "UCI 7"] + ["PISO 8"]
+        assert cfg["entregas"][-1]["url"].startswith("https://docs.google.com/document/d/1AbCdEf")
         # Cancelar descarta
         page.click("#setBtn")
         page.get_by_label("Nombre del nuevo especialista").fill("NADIE")
         page.get_by_role("button", name="Agregar", exact=True).click()
+        expect(page.locator("#entList input[data-ent=nombre]")).to_have_count(11)           # lo guardado vuelve a mostrarse
+        page.get_by_role("button", name="Agregar documento").click()
+        expect(page.locator("#entList input[data-ent=nombre]")).to_have_count(12)
         page.get_by_role("button", name="Cancelar").click()
         assert "NADIE" not in _api(app, "/api/estado")["config"]["especialistas"]
+        assert len(_api(app, "/api/estado")["config"]["entregas"]) == 11
 
         # ---- Tema oscuro
         page.click("#themeBtn")

@@ -84,7 +84,9 @@ def test_seguridad(c, srv):
 def test_estado_inicial(c):
     e = c.estado()
     assert e["version"] == "2.0.0" and e["demo"] is True
-    assert set(e["config"]) >= {"url_kardex", "url_agenda", "especialistas", "navegador"}
+    assert set(e["config"]) >= {"url_kardex", "url_agenda", "especialistas", "navegador", "entregas"}
+    assert len(e["config"]["entregas"]) == 11 and all(set(d) == {"nombre", "url"} for d in e["config"]["entregas"])
+    assert e["config"]["entregas"][0]["nombre"] == "PISO 3 GINECO"
     assert set(e["navegadores"]) == {"chrome", "brave"}
     assert e["sesion_guardada"] is False and e["credenciales"] is True
     assert e["sesion_pasos"] == {"hospital": False, "google": False}
@@ -106,6 +108,38 @@ def test_config(c):
     assert c.estado()["config"]["navegador"] == "brave"
 
 
+DOC = "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-aBcDe/edit"
+
+
+def test_config_entregas(c):
+    nuevas = [{"nombre": "  PISO 6 ", "url": DOC}, {"nombre": "URGENCIAS CARRERA 47", "url": DOC + "?tab=t.0"}]
+    st, r = c.post("/api/config", {"entregas": nuevas})
+    assert st == 200 and r["ok"]
+    assert r["config"]["entregas"] == [{"nombre": "PISO 6", "url": DOC}, {"nombre": "URGENCIAS CARRERA 47", "url": DOC + "?tab=t.0"}]
+    assert c.estado()["config"]["entregas"] == r["config"]["entregas"]
+    assert flujo.cargar_config()["entregas"] == r["config"]["entregas"]          # quedó en disco
+    assert c.post("/api/config", {"entregas": []})[0] == 200                     # vacía: no se lee ninguna
+    assert c.estado()["config"]["entregas"] == []
+    # un cambio parcial de otra cosa no toca las entregas
+    c.post("/api/config", {"entregas": nuevas})
+    c.post("/api/config", {"navegador": "brave"})
+    assert len(c.estado()["config"]["entregas"]) == 2
+    bien = {"nombre": "A", "url": DOC}
+    for malo in ("PISO 6", {"nombre": "A"}, [5], [{"nombre": "A", "url": 5}], [{"nombre": 5, "url": DOC}],
+                 [{"nombre": "", "url": DOC}], [{"nombre": "   ", "url": DOC}], [{"nombre": "A" * 81, "url": DOC}],
+                 [{"nombre": "A", "url": "https://evil.example.com/document/d/abc/edit"}],
+                 [{"nombre": "A", "url": "https://docs.google.com.evil.example.com/document/d/abc/edit"}],
+                 [{"nombre": "A", "url": "https://docs.google.com/spreadsheets/d/abc/edit"}],
+                 [{"nombre": "A", "url": "https://docs.google.com/document/d//edit"}],
+                 [{"nombre": "A", "url": "docs.google.com/document/d/abc/edit"}],
+                 [{"nombre": "A", "url": "--renderer-cmd-prefix=x"}], [bien] * 31):
+        st, r = c.post("/api/config", {"entregas": malo})
+        assert st == 400 and r["ok"] is False, malo
+    assert len(c.estado()["config"]["entregas"]) == 2                            # lo inválido no cambió nada
+    st, r = c.post("/api/config", {"entregas": [{"nombre": "A" * 80, "url": DOC}] * 30})   # los límites exactos sí
+    assert st == 200 and len(r["config"]["entregas"]) == 30
+
+
 def test_json_invalido(c, srv):
     k = http.client.HTTPConnection("127.0.0.1", srv.puerto, timeout=5)
     k.request("POST", "/api/config", b"{no", {"X-Token": srv.token, "Host": f"127.0.0.1:{srv.puerto}"})
@@ -125,41 +159,89 @@ def test_flujo_completo(c):
     n = e["ultima"]["n"]
     assert e["ultima"]["tipo"] == "analizar" and e["ultima"]["fin"] == "ok" and e["error"] is None
     r = e["resultado"]
-    assert len(r["fecha"]) == 16 and len(r["sistema"]) == 29 and len(r["kardex"]) == 29
+    # 29 filas en el kardex; en el sistema faltan 2 (altas) y se suman 3 pacientes de las entregas que no están en el kardex
+    assert len(r["fecha"]) == 16 and len(r["sistema"]) == 30 and len(r["kardex"]) == 29
     assert len({k["servicio"] for k in r["kardex"]}) == 13
-    assert {a["tipo"] for a in r["acciones"]} == {"ACTUALIZAR", "AGREGAR", "RETIRAR", "REVISAR"}
+    assert {a["tipo"] for a in r["acciones"]} == {"ACTUALIZAR", "AGREGAR", "MOVER", "RETIRAR", "REVISAR"}
     assert set(r["acciones"][0]) == {"id", "tipo", "paciente", "servicio", "habitacion", "campo", "detalle",
-                                     "actual", "nuevo", "automatica", "marcada", "id_sistema", "id_kardex"}
+                                     "actual", "nuevo", "automatica", "marcada", "id_sistema", "id_kardex",
+                                     "destino", "insertar", "fila_nueva", "habitacion_nueva"}
     ids_s, ids_k = {x["id"] for x in r["sistema"]}, {x["id"] for x in r["kardex"]}
     for a in r["acciones"]:
-        assert a["id_sistema"] in ids_s | {None} and a["id_kardex"] in ids_k | {None}
-        assert (a["id_sistema"] is None) == (a["tipo"] == "RETIRAR")
-        assert (a["id_kardex"] is None) == (a["tipo"] == "AGREGAR")
+        if a["tipo"] == "RETIRAR":
+            assert a["id_sistema"] is None and a["id_kardex"] in ids_k
+        elif a["tipo"] == "AGREGAR":
+            assert a["id_kardex"] is None and a["id_sistema"] in ids_s
+        elif a["paciente"] == "UCI 7":              # documento de entregas que no se pudo leer: sin paciente
+            assert a["tipo"] == "REVISAR" and a["id_sistema"] is None and a["id_kardex"] is None
+        else:
+            assert a["id_sistema"] in ids_s and a["id_kardex"] in ids_k
     assert set(r["sistema"][0]) == {"id", "nombre", "habitacion", "medico", "fecha", "dx", "id_kardex"}
     assert set(r["kardex"][0]) == {"id", "servicio", "nombre", "habitacion", "dx", "id_sistema"}
-    assert e["progreso"]["total"] > 0 and e["progreso"]["actual"] == e["progreso"]["total"]
+    assert e["progreso"]["total"] == 32 and e["progreso"]["actual"] == 32       # 29 del kardex + 3 de las entregas
     assert any("Análisis terminado" in linea for linea in e["registro"])
     assert all(linea[2] == ":" for linea in e["registro"])
 
+    # lo nuevo, serializado para la interfaz
+    agregar = [a for a in r["acciones"] if a["tipo"] == "AGREGAR"]
+    con_destino = [a for a in agregar if a["automatica"]]
+    assert len(agregar) == 3 and len(con_destino) == 2
+    a = next(x for x in con_destino if x["destino"] == "PISO 6")
+    assert [c_ for c_, _ in a["fila_nueva"]] == ["DATOS", "DX", "EVOLUCIÓN", "TRATAMIENTO", "IMÁGENES / NOTAS"]
+    assert a["fila_nueva"][0][1].splitlines() == ["611", a["paciente"], "47 AÑOS", "CC 1015000111"]
+    assert a["habitacion_nueva"] == "611" and a["marcada"] and a["servicio"] == "PISO 6"
+    manual = next(x for x in agregar if not x["automatica"])
+    assert manual["destino"] == "" and not manual["marcada"] and "agrégalo a mano" in manual["detalle"]
+    assert manual["fila_nueva"] and manual["fila_nueva"][0][0] == "DATOS"
+    mover = [a for a in r["acciones"] if a["tipo"] == "MOVER"]
+    assert sorted((a["servicio"], a["destino"], a["habitacion_nueva"]) for a in mover) == [
+        ("PISO 4A", "PISO 4C", "405"), ("PISO 6", "PISO 5", "512")]
+    assert all(a["automatica"] and a["marcada"] and a["fila_nueva"] == [] for a in mover)
+    hab = [a for a in r["acciones"] if a["tipo"] == "ACTUALIZAR" and a["campo"] == "HABITACIÓN"]
+    assert [(a["actual"], a["nuevo"], a["habitacion_nueva"]) for a in hab] == [("302", "306", "306")]
+    imagenes = [a for a in r["acciones"] if a["campo"] == "IMÁGENES / NOTAS"]
+    assert len(imagenes) == 2 and all(a["insertar"] and a["insertar"] in a["nuevo"] for a in imagenes)
+    assert all(a["insertar"] == "" for a in r["acciones"] if a["campo"] != "IMÁGENES / NOTAS")
+    doc = next(a for a in r["acciones"] if a["paciente"] == "UCI 7")
+    assert doc["detalle"].startswith("No pude leer el documento de entregas UCI 7:") and not doc["automatica"]
+
+    # se escriben las automáticas marcadas de ACTUALIZAR, AGREGAR y MOVER; las manuales se ignoran
     auto = [a for a in r["acciones"] if a["automatica"]]
     otros = [a for a in r["acciones"] if not a["automatica"]]
-    assert auto and all(a["tipo"] == "ACTUALIZAR" for a in auto)
-    ids = [a["id"] for a in auto[:4]] + [otros[0]["id"]]      # el no automático se ignora
-    st, _ = c.post("/api/escribir", {"ids": ids})
+    assert {a["tipo"] for a in auto} == {"ACTUALIZAR", "AGREGAR", "MOVER"} and len(auto) == 19
+    st, _ = c.post("/api/escribir", {"ids": [x["id"] for x in auto] + [otros[0]["id"]]})      # el no automático se ignora
     assert st == 200
     e = c.esperar_fin(n)
     esc = e["escritura"]
-    assert e["ultima"]["tipo"] == "escribir" and len(esc["escritas"]) == 3 and len(esc["omitidas"]) == 1
+    assert e["ultima"]["tipo"] == "escribir" and len(esc["escritas"]) == 18 and len(esc["omitidas"]) == 1
     assert esc["omitidas"][0]["motivo"].startswith("La fila cambió")
-    assert set(esc["escritas"][0]) == {"id", "paciente", "campo"}
-    assert set(esc["omitidas"][0]) == {"id", "paciente", "campo", "motivo"}
+    assert set(esc["escritas"][0]) == {"id", "paciente", "campo", "tipo", "destino"}
+    assert set(esc["omitidas"][0]) == {"id", "paciente", "campo", "tipo", "destino", "motivo"}
+    assert {(x["tipo"], x["destino"]) for x in esc["escritas"] if x["tipo"] != "ACTUALIZAR"} == {
+        ("AGREGAR", "PISO 6"), ("AGREGAR", "URGENCIAS 47"), ("MOVER", "PISO 5"), ("MOVER", "PISO 4C")}
     quedan = {a["id"] for a in e["resultado"]["acciones"]}
     assert not quedan & {x["id"] for x in esc["escritas"]}
     assert esc["omitidas"][0]["id"] in quedan
+    assert {x["id"] for x in otros} <= quedan
 
     st, r = c.post("/api/escribir", {"ids": [otros[0]["id"]]})
     assert st == 400 and r["ok"] is False
+    st, r = c.post("/api/escribir", {"ids": [manual["id"]]})        # AGREGAR sin tabla destino: a mano
+    assert st == 400 and r["ok"] is False
     assert c.post("/api/escribir", {"ids": "a1"})[0] == 400
+
+
+def test_escribir_acepta_agregar_y_mover(c):
+    c.post("/api/analizar")
+    e = c.esperar_fin(0)
+    acciones = e["resultado"]["acciones"]
+    ids = [a["id"] for a in acciones if a["tipo"] in ("AGREGAR", "MOVER") and a["automatica"]]
+    assert len(ids) == 4
+    assert c.post("/api/escribir", {"ids": ids})[0] == 200
+    e = c.esperar_fin(1)
+    assert [x["tipo"] for x in e["escritura"]["escritas"]] == ["MOVER", "MOVER", "AGREGAR", "AGREGAR"]
+    assert not e["escritura"]["omitidas"]       # solo se «omite» una ACTUALIZAR cuando hay varias
+    assert not {a["id"] for a in e["resultado"]["acciones"]} & set(ids)
 
 
 def test_409_con_tarea_en_curso(c, monkeypatch):

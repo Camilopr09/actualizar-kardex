@@ -3,12 +3,14 @@ import json
 import mimetypes
 import secrets
 import sys
+import re
 import threading
 import time
 from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse
 
 import demo as modulo_demo
 import flujo
@@ -19,6 +21,8 @@ from errores import Cancelado, ErrorApp
 
 VERSION = "2.0.0"
 MAX_CUERPO = 2_000_000
+MAX_ENTREGAS = 30           # documentos de entregas que se pueden configurar
+MAX_NOMBRE_ENTREGA = 80
 MARCADOR = ("<!doctype html><html lang=\"es\"><meta charset=\"utf-8\"><title>Actualizar Kardex</title>"
             "<body><p>Falta ui/index.html (la interfaz).</p></body></html>")
 
@@ -26,6 +30,33 @@ MARCADOR = ("<!doctype html><html lang=\"es\"><meta charset=\"utf-8\"><title>Act
 def carpeta_ui():
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
     return base / "ui"
+
+
+_RE_DOC_GOOGLE = re.compile(r"^/document/d/[A-Za-z0-9_-]+(?:/|$)")
+
+
+def validar_entregas(valor):
+    """Lista de documentos de entregas [{nombre, url}] ya limpia (sin espacios sobrantes). Lanza ValueError si es
+    inválida: hasta 30 documentos, nombre de 1 a 80 caracteres y enlace de un Google Doc
+    (docs.google.com/document/d/…). Una lista vacía es válida (no se leerá ningún documento de entregas)."""
+    if not isinstance(valor, list):
+        raise ValueError("entregas debe ser una lista de documentos")
+    if len(valor) > MAX_ENTREGAS:
+        raise ValueError(f"Hay demasiados documentos de entregas (máximo {MAX_ENTREGAS})")
+    limpia = []
+    for i, e in enumerate(valor, 1):
+        if not isinstance(e, dict) or not isinstance(e.get("nombre"), str) or not isinstance(e.get("url"), str):
+            raise ValueError(f"Documento de entregas {i}: debe traer un nombre y un enlace")
+        nombre, url = " ".join(e["nombre"].split()), e["url"].strip()
+        if not nombre or len(nombre) > MAX_NOMBRE_ENTREGA:
+            raise ValueError(f"Documento de entregas {i}: el nombre debe tener entre 1 y {MAX_NOMBRE_ENTREGA} caracteres")
+        u = urlparse(url)
+        if u.scheme not in ("http", "https") or (u.hostname or "").lower() != "docs.google.com" \
+                or not _RE_DOC_GOOGLE.match(u.path):
+            raise ValueError(f"Documento de entregas «{nombre}»: el enlace debe ser de un Google Doc "
+                             "(docs.google.com/document/d/…)")
+        limpia.append({"nombre": nombre, "url": url})
+    return limpia
 
 
 class Servidor:
@@ -133,7 +164,9 @@ class Servidor:
                           "habitacion": a.habitacion, "campo": a.campo, "detalle": a.detalle,
                           "id_sistema": id_s.get(id(a.sis)), "id_kardex": id_k.get(id(a.fila)),
                           "actual": a.actual, "nuevo": a.nuevo, "automatica": a.automatica,
-                          "marcada": a.marcada} for aid, a in self.acciones],
+                          "marcada": a.marcada, "destino": a.destino, "insertar": a.insertar,
+                          "fila_nueva": [[c, t] for c, t in a.fila_nueva.items()],      # en el orden de las columnas
+                          "habitacion_nueva": a.habitacion_nueva} for aid, a in self.acciones],
         }
 
     def estado(self):
@@ -224,7 +257,7 @@ class Servidor:
             self.fecha = f"{datetime.now():%d/%m/%Y %H:%M}"
             self.escritura = None
             auto = sum(1 for a in acciones if a.automatica)
-            self.log(f"Análisis terminado: {auto} celdas por actualizar, {len(acciones) - auto} avisos a revisar a mano.")
+            self.log(f"Análisis terminado: {auto} cambios por escribir, {len(acciones) - auto} avisos a revisar a mano.")
         return self.lanzar("analizar", trabajo, listo)
 
     def tarea_escribir(self, elegidas):
@@ -233,10 +266,12 @@ class Servidor:
         def listo(res):
             escritas, omitidas = res
             ids = {id(a): aid for aid, a in self.acciones}
+            # tipo y destino sirven para describir las filas nuevas y los cambios de piso (que no tienen campo)
             self.escritura = {
-                "escritas": [{"id": ids.get(id(a), ""), "paciente": a.paciente, "campo": a.campo} for a in escritas],
-                "omitidas": [{"id": ids.get(id(a), ""), "paciente": a.paciente, "campo": a.campo, "motivo": m}
-                             for a, m in omitidas]}
+                "escritas": [{"id": ids.get(id(a), ""), "paciente": a.paciente, "campo": a.campo, "tipo": a.tipo,
+                              "destino": a.destino} for a in escritas],
+                "omitidas": [{"id": ids.get(id(a), ""), "paciente": a.paciente, "campo": a.campo, "tipo": a.tipo,
+                              "destino": a.destino, "motivo": m} for a, m in omitidas]}
             hechas = {id(a) for a in escritas}
             self.acciones = [(aid, a) for aid, a in self.acciones if id(a) not in hechas]
         return self.lanzar("escribir", lambda: self.backend.aplicar(cfg, elegidas, self.log), listo)
@@ -263,6 +298,8 @@ class Servidor:
             if not isinstance(esp, list) or not all(isinstance(e, str) and e.strip() for e in esp):
                 raise ValueError("especialistas debe ser una lista de textos no vacíos")
             nuevo["especialistas"] = [e.strip() for e in esp]
+        if "entregas" in datos:
+            nuevo["entregas"] = validar_entregas(datos["entregas"])
         with self.lock:
             self.cfg.update(nuevo)
             flujo.guardar_config(self.cfg)
@@ -450,9 +487,10 @@ class _Handler(BaseHTTPRequestHandler):
             if app.tarea:
                 return self._ocupado()
             quiero = set(ids)
+            # automatica = ACTUALIZAR de una fila, AGREGAR a una tabla conocida o MOVER a una tabla conocida
             elegidas = [a for aid, a in app.acciones if aid in quiero and a.automatica]
         if not elegidas:
-            return self._fallo(400, "No hay actualizaciones válidas para escribir")
+            return self._fallo(400, "No hay cambios válidos para escribir")
         self._json(200, {"ok": True}) if app.tarea_escribir(elegidas) else self._ocupado()
 
     def _abrir(self, d):
