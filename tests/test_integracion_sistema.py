@@ -572,6 +572,228 @@ def test_leer_formato_por_pestanas_y_orden_sin_pestanas(sis):
         assert s._leer_formato()["FORMATO"]["_texto"] == od["texto"]
 
 
+# ---------------------------------------------------------------- informes de imagenología
+def _historia(s, pid):
+    """Abre la historia del paciente `pid` del simulador (buscándolo en la Agenda y pulsando «Atender», como la app)."""
+    from simulador.servidor import PACIENTES
+    _, nombre, tipo, doc, _hab, modo, *_ = next(x for x in PACIENTES if x[0] == pid)
+    p = s.buscar(nombre, doc, tipo, [modo])
+    assert p and s._atender(p), nombre
+    return p
+
+
+def test_leer_imagenes_de_una_historia(sis):
+    with Simulador() as sim:
+        s = sis(sim)
+        _historia(s, 1)
+        res = s._leer_imagenes()
+        # más reciente primero (en la grilla el más antiguo va antes); cada dato sale de la pestaña EXAMEN
+        assert res == [
+            {"numero": "22807105", "fecha_grilla": "19/10/2026 16:38:38", "fecha_texto": "19 DE OCTUBRE DEL 2026",
+             "tipo": "ECOGRAFÍA", "estudio": "TEJIDOS BLANDOS EN LA REGIÓN DORSAL LINEA MEDIA",
+             "texto": "Engrosamiento cutáneo\nÁreas líquidas de bordes irregulares, sin tabiques, de 12 x 8 mm.\n"
+                      "No se observan colecciones organizadas.\n"
+                      "OPINION: Hallazgos compatibles con proceso inflamatorio de tejidos blandos."},
+            {"numero": "22807104", "fecha_grilla": "17/10/2026 09:12:45", "fecha_texto": "17 de octubre de 2026",
+             "tipo": "TOMOGRAFÍA", "estudio": "ABDOMEN SIMPLE",
+             "texto": "CONCLUSIÓN: -Hallazgos compatibles con proceso infeccioso de la vesícula biliar.\n"
+                      "-Líquido libre en pelvis en mínima cantidad."}]
+        # el panel es el del informe (título con su N°); «DESCRIPCIÓN DEL EXAMEN» viene vacía y EXAMEN tiene la
+        # textarea del informe sin etiqueta (aquí queda con la etiqueta de la tira de pestañas, la de su fila vacía)
+        assert s._abrir_informe("22807105", 0)
+        assert s._titulo_detalle() == ("22807105", "INFORME DE IMAGENOLOGIA")
+        f = s._leer_formato()
+        assert list(f) == ["EXAMEN", "DESCRIPCION DEL EXAMEN"] and f["DESCRIPCION DEL EXAMEN"] == {"_texto": ""}
+        ex = f["EXAMEN"]
+        assert ex["FECHA DE REALIZACION DEL ESTUDIO"] == "19 DE OCTUBRE DEL 2026" and ex["TIPO ESTUDIO"] == "ECOGRAFÍA"
+        assert ex["ESTUDIO"] == "TEJIDOS BLANDOS EN LA REGIÓN DORSAL LINEA MEDIA"
+        assert [k for k, _ in ex["_areas"]][:2] == ["FECHA DE REALIZACION DEL ESTUDIO", "ESTUDIO"] and len(ex["_areas"]) == 3
+        # leer solo EXAMEN (sin la pestaña vacía) da lo mismo
+        assert s._datos_informe(s._leer_formato(omitir=("DESCRIPCION DEL EXAMEN",))) == s._datos_informe(f)
+
+
+@pytest.mark.parametrize("filtro, pag_cliente", [
+    ("contiene", True), ("contiene", False), ("empieza", True), ("ninguno", True), ("ninguno", False)])
+def test_leer_imagenes_recorre_todas_las_paginas_de_formatos(sis, filtro, pag_cliente):
+    # BENAVIDES: 18 formatos (2 páginas sin filtrar) y un informe en cada página; con «empieza con» el filtro
+    # «IMAGENOLOG» no halla nada y se prueba «INFORME DE IMAGENOLOG»; con «ninguno» el filtro no hace nada y se
+    # recorren las 2 páginas quedándose con las filas de imagenología
+    with Simulador(filtro_formatos=filtro, pag_cliente=pag_cliente) as sim:
+        s = sis(sim)
+        _historia(s, 2)
+        res = s._leer_imagenes()
+        assert s._filtro_img == ("INFORME DE IMAGENOLOG" if filtro == "empieza" else "IMAGENOLOG")
+    assert [(r["numero"], r["fecha_grilla"], r["tipo"], r["estudio"]) for r in res] == [
+        ("22807213", "19/10/2026 05:50:00", "ECOGRAFÍA", "ECO RENAL Y DE VIAS URINARIAS"),       # página 2 sin filtrar
+        ("22807206", "18/10/2026 11:05:10", "RADIOGRAFÍA", "TORAX PA Y LATERAL")]
+    assert res[0]["fecha_texto"] == "19/10/2026" and res[1]["fecha_texto"] == ""                  # fecha del estudio en blanco
+    assert res[0]["texto"].splitlines() == [
+        "Con transductor convex de 3.5 Mhz se realiza barrido sonográfico observando:",
+        "Riñón derecho de tamaño normal, sin dilatación de la vía urinaria.", "",
+        "Riñón izquierdo con quiste cortical de 14 mm.", "OPINION: Quiste renal simple izquierdo."]
+
+
+def test_grilla_de_formatos_con_pager_de_diez_en_diez(sis):
+    with Simulador() as sim:
+        s = sis(sim)
+        _historia(s, 2)
+        assert len(s._filas_formatos()) == 10 and s._fr().inner_text("body").count("Page 1 of 2 (18 items)") == 1
+        assert [f["nombre"] for f in s._leer_todo(sistema.GRID_FORM, 5, s._filas_formatos)].count("INFORME DE IMAGENOLOGIA") == 2
+        s._ir_pagina_formatos(1)
+        assert len(s._filas_formatos()) == 8 and "Page 2 of 2 (18 items)" in s._fr().inner_text("body")
+        # las pruebas de siempre siguen viendo la hoja y la orden (los formatos nuevos van al final de la lista)
+        s._recargar_historia()
+        assert s._ultimo_formato("HOJA DE EVOLUCION", ["FABIAN"])["fecha"] == "19/10/2026 07:20"
+
+
+def test_filtrado_con_dos_paginas_y_tope_de_informes(sis):
+    # BELTRAN OCHOA: 12 informes = 2 páginas incluso con el filtro; el tope se aplica a los más recientes
+    with Simulador() as sim:
+        s = sis(sim)
+        _historia(s, 101)
+        filas = s._filas_imagenologia()
+        assert len(filas) == 12 and [f["pagina"] for f in filas] == [0] * 10 + [1] * 2
+        s.MAX_IMAGENES = 3
+        res = s._leer_imagenes()
+        # el 12 y el 11 están en la página 2 del filtro y el 10 en la 1: se pasa de una a otra
+        assert [r["texto"].splitlines()[0] for r in res] == ["Informe inventado 12.", "Informe inventado 11.",
+                                                             "Informe inventado 10."]
+        assert [r["fecha_texto"] for r in res] == ["18 DE OCTUBRE DEL 2026", "17 DE OCTUBRE DEL 2026", "16 DE OCTUBRE DEL 2026"]
+
+
+def test_sin_informes_de_imagenologia_da_lista_vacia(sis):
+    with Simulador() as sim:
+        s = sis(sim)
+        _historia(s, 3)                 # CORREA: solo una hoja de evolución
+        assert s._leer_imagenes() == []
+        assert s._filtro_img is None    # sin informes no se sabe aún qué filtro sirve: se prueban los dos cada vez
+
+
+def test_un_error_en_un_informe_se_anota_y_se_sigue(sis):
+    with Simulador() as sim:
+        s = sis(sim)
+        registro = []
+        s.log = registro.append
+        _historia(s, 1)
+        real, llamadas = s._leer_formato, []
+
+        def falla(**kw):
+            llamadas.append(1)
+            if len(llamadas) == 1:
+                raise RuntimeError("se cayó la pestaña")
+            return real(**kw)
+        s._leer_formato = falla
+        res = s._leer_imagenes()
+    assert [r["numero"] for r in res] == ["22807104"]                  # el más reciente (22807105) falló; el otro se leyó
+    fallos = [r for r in registro if "no pude" in r]
+    assert len(fallos) == 1 and fallos[0].startswith("  no pude leer el informe de imagenología 22807105")
+    assert "se cayó la pestaña" in fallos[0]
+
+
+def test_datos_del_informe_segun_las_etiquetas_que_haya():
+    leer = sistema.Sistema._datos_informe
+    informe = "Engrosamiento cutáneo\nÁreas líquidas que se extienden al plano muscular"
+    fecha, estudio = ("FECHA DE REALIZACION DEL ESTUDIO", "19 DE OCTUBRE DEL 2026"), ("ESTUDIO", "TEJIDOS BLANDOS")
+    esperado = {"fecha_texto": "19 DE OCTUBRE DEL 2026", "tipo": "ECOGRAFÍA", "estudio": "TEJIDOS BLANDOS", "texto": informe}
+
+    def examen(areas, extra=None):
+        campos = {**dict(areas), "TIPO ESTUDIO": "ECOGRAFÍA", **(extra or {})}
+        return {"EXAMEN": {**campos, "_texto": "\n".join(v for _, v in areas), "_areas": areas},
+                "DESCRIPCION DEL EXAMEN": {"_texto": ""}}
+    # a) la textarea del informe no tiene etiqueta: «CAMPO n»
+    assert leer(examen([fecha, estudio, ("CAMPO 4", informe)])) == esperado
+    # b) su "etiqueta" es el texto de otra celda (la tira de pestañas): la textarea más larga que no es fecha ni estudio
+    assert leer(examen([fecha, estudio, ("EXAMEN DESCRIPCION DEL EXAMEN", informe)])) == esperado
+    # c) con una textarea corta sin etiqueta y otra larga con etiqueta, gana la que no tiene etiqueta
+    assert leer(examen([fecha, estudio, ("CAMPO 4", informe), ("OTRA COSA", informe + " y más texto")]))["texto"] == informe
+    # d) sin la textarea del informe: texto vacío; el tipo es un combo (no cuenta como textarea)
+    assert leer(examen([fecha, estudio])) == {**esperado, "texto": ""}
+    # e) pestaña con otro nombre, o formato sin pestañas: se usa lo que haya
+    assert leer({"EXAMEN RADIOLOGICO": examen([fecha, estudio, ("CAMPO 4", informe)])["EXAMEN"]}) == esperado
+    assert leer({"FORMATO": examen([fecha, estudio, ("CAMPO 4", informe)])["EXAMEN"]}) == esperado
+    assert leer({}) == {"fecha_texto": "", "tipo": "", "estudio": "", "texto": ""}
+
+
+def test_detalle_lee_las_imagenes_del_paciente(sis):
+    import notas
+    if not hasattr(notas, "EstudioImagen"):
+        pytest.skip("notas.EstudioImagen aún no existe")
+    with Simulador() as sim:
+        s = sis(sim)
+        registro = []
+        s.log = registro.append
+        a = s.detalle(s.buscar("PEDRO ALVARADO", "1020304051", "CC", ["Hospitalización"]))
+        assert a.encontrado_detalle and not a.aviso and a.dx == "1. COLECISTITIS AGUDA\n2. HTA"
+        assert [(e.fecha, e.tipo, e.estudio, e.numero) for e in a.imagenes] == [
+            ("19/10/26", "ECOGRAFÍA", "TEJIDOS BLANDOS EN LA REGIÓN DORSAL LINEA MEDIA", "22807105"),
+            ("17/10/26", "TOMOGRAFÍA", "ABDOMEN SIMPLE", "22807104")]
+        assert a.imagenes[0].texto.startswith("Engrosamiento cutáneo\nÁreas líquidas") and a.imagenes[1].texto.endswith("mínima cantidad.")
+        # BENAVIDES: la fecha del estudio está en blanco en uno de los informes -> la «Fecha Hora» de la grilla
+        b = s.detalle(s.buscar("SOFIA BENAVIDES LUNA", "1020304052", "CC", ["Hospitalización"]))
+        assert [(e.fecha, e.numero) for e in b.imagenes] == [("19/10/26", "22807213"), ("18/10/26", "22807206")]
+        # sin informes: lista vacía
+        assert s.detalle(s.buscar("TOMAS CORREA MEJIA", "1020304053", "CC", ["Urgencias"])).imagenes == []
+        assert not [r for r in registro if "no pude" in r]
+
+
+def test_un_fallo_al_leer_las_imagenes_no_tumba_al_paciente(sis):
+    with Simulador() as sim:
+        s = sis(sim)
+        registro = []
+        s.log = registro.append
+
+        def falla():
+            raise RuntimeError("la grilla no responde")
+        s._leer_imagenes = falla
+        a = s.detalle(s.buscar("PEDRO ALVARADO", "1020304051", "CC", ["Hospitalización"]))
+    assert a.encontrado_detalle and not a.aviso and a.dx == "1. COLECISTITIS AGUDA\n2. HTA"
+    assert a.tratamiento.startswith("PLAN\n1. DIETA LIQUIDA") and not getattr(a, "imagenes", [])
+    assert [r for r in registro if "no pude leer las imágenes" in r] == [
+        "  PEDRO PABLO ALVARADO RUIZ: no pude leer las imágenes (la grilla no responde)"] \
+        or any("no pude leer las imágenes" in r and "PEDRO PABLO ALVARADO RUIZ" in r for r in registro)
+
+
+def test_el_simulador_sirve_los_documentos_de_entregas():
+    import urllib.error
+    import urllib.request
+
+    import kardex_doc
+    import notas
+
+    def bajar(sim, n):
+        with urllib.request.urlopen(sim.url_entregas(n), timeout=10) as r:
+            return r.read().decode("utf-8")
+    nombres = ["PISO 6", "URGENCIAS CARRERA 47", "PISO 4C (401-421)"]
+    with Simulador(entregas_fallan=[2]) as sim:
+        assert [e["nombre"] for e in sim.entregas] == nombres
+        assert sim.entregas[0]["url"] == sim.url_entregas(1) == f"http://localhost:{sim.puerto}/entregas/1"
+        for n in (2, 4, 0):                                                  # caído a propósito / no existe
+            with pytest.raises(urllib.error.HTTPError) as e:
+                bajar(sim, n)
+            assert e.value.code == 404
+        assert "PISO 6 ( 3 PACIENTES)" in bajar(sim, 1)
+    with Simulador() as sim:
+        docs = [bajar(sim, n) for n in (1, 2, 3)]
+    # misma estructura que el kardex: título combinado, encabezado DATOS | DX | …, una fila por paciente y filas vacías
+    assert "PENDIENTES" in docs[0] and "IMAGENES / NOTAS" in docs[0] and "PISO 4C ( 2 PACIENTES) 401 - 421" in docs[2]
+    filas = kardex_doc.parsear_kardex_html(docs[0])
+    assert [f.servicio for f in filas] == ["PISO 6"] * 3
+    assert [f.datos.splitlines()[1:3] for f in filas] == [["PEDRO PABLO", "ALVARADO RUIZ"], ["PEDRO NEL", "SIERRA CANO"],
+                                                           ["GLORIA INES", "HERRERA VARGAS"]]
+    assert "VALORACION POR CIRUGIA GENERAL" in filas[0].evolucion and "VAL X CX GENERAL" in docs[0]
+    assert [f.servicio for f in kardex_doc.parsear_kardex_html(docs[1])] == ["URGENCIAS 47"] * 2
+    assert [f.servicio for f in kardex_doc.parsear_kardex_html(docs[2])] == ["PISO 4C"] * 2
+    assert "A CARGO DE CIRUGIA GENERAL" in docs[1] and "SS VAL CX GENERAL" in docs[2]
+    # con el lector de entregas y el detector de cirugía general: unos sí y otros no; ALVARADO y CORREA están en el
+    # kardex simulado, SIERRA CANO y ROJAS DIAZ (Urgencias) solo en el sistema simulado
+    if hasattr(kardex_doc, "parsear_entregas_html") and hasattr(notas, "menciona_cirugia"):
+        todos = [e for d, nombre in zip(docs, nombres) for e in kardex_doc.parsear_entregas_html(d, nombre)]
+        assert {e.nombre: notas.menciona_cirugia(e.texto) for e in todos} == {
+            "PEDRO PABLO ALVARADO RUIZ": True, "PEDRO NEL SIERRA CANO": True, "GLORIA INES HERRERA VARGAS": False,
+            "TOMAS CORREA MEJIA": False, "ELSA MARINA ROJAS DIAZ": True, "LAURA GUTIERREZ OSORIO": True,
+            "HUMBERTO FORERO LEAL": False}
+
+
 @pytest.fixture
 def pagina():
     from playwright.sync_api import sync_playwright

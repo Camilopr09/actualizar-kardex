@@ -13,14 +13,18 @@
     atendidos más abajo (en el sistema real NO existe; sirve para probar el respaldo).
   * Stub de ASPxClientControl.GetControlCollection().elements[id]: InCallback, AutoFilterByColumn («empieza con»),
     GetColumnsCount/GetColumn, GetPageCount/GotoPage y el pager con ASPx.GVPagerOnClick(..., 'PBN').
-  * /HistoriaClinica.aspx: grilla de formatos; «Ver» llena los textareas tras un pequeño retardo.
+  * /HistoriaClinica.aspx: grilla de formatos (paginada de 10 en 10, con el resumen «Page 1 of 2 (18 items)»);
+    «Ver» llena los textareas tras un pequeño retardo. Los «INFORME DE IMAGENOLOGIA» tienen las pestañas EXAMEN
+    (fecha, tipo de estudio, estudio y el informe en un textarea SIN etiqueta) y «DESCRIPCIÓN DEL EXAMEN» (vacía).
   * /kardex: kardex exportado (HTML de Google Docs, simplificado).
+  * /entregas/<n>: documentos de «ENTREGAS» exportados (n = 1, 2…; `Simulador.entregas` da nombre y URL de cada uno).
 La sesión puede «vencer» tras N peticiones protegidas.
 Variantes (parámetros de Simulador): login_realista (usuario con texto guía, contraseña type=text que pasa a password
 al enfocar, botón input[type=image] src=/img/entrar.png sin alt ni value, URL de login SIN la palabra «login»),
 iframe (menú y contenido dentro de un iframe del Dashboard), sin_titulo (grilla sin el título «Pacientes Por
 Atender» y con otro id: solo encabezados), icono_en_cabecera (texto de la cabecera en un span con un <img> al lado) y
-agenda_redirige (url_agenda redirige al Dashboard aunque haya sesión).
+agenda_redirige (url_agenda redirige al Dashboard aunque haya sesión). Grilla de formatos: filtro_formatos
+(«contiene», «empieza» con o «ninguno» = AutoFilterByColumn no hace nada) y tam_formatos (filas por página).
 """
 import base64
 import html
@@ -117,6 +121,82 @@ FORMATOS = {
                "1. DIETA LIQUIDA 2. CEFAZOLINA 1 G IV C/8H"))],
 }
 
+# ---- informes de imagenología (pestañas EXAMEN y «DESCRIPCIÓN DEL EXAMEN», esta vacía) y formatos de relleno
+IMG = "INFORME DE IMAGENOLOGIA"
+USUARIO_IMG = "VARGAS LEAL PAULA"
+
+
+def _informe(fecha, tipo, estudio, texto):
+    """Detalle de un «INFORME DE IMAGENOLOGIA». EXAMEN: fecha del estudio (textarea), tipo (combo de solo lectura),
+    estudio (textarea) y el informe (textarea SIN etiqueta, en la celda de la derecha de una celda vacía)."""
+    return {"informe": {"fecha": fecha, "tipo": tipo, "estudio": estudio, "texto": texto}}
+
+
+_RELLENOS = ["NOTA DE ENFERMERIA", "CONTROL DE SIGNOS VITALES", "ESCALA DE BRADEN", "BALANCE DE LIQUIDOS"]
+
+
+def _relleno(desde, n):
+    """n formatos que no son evolución, órdenes ni imágenes (para que la grilla de formatos tenga varias páginas)."""
+    return [(_RELLENOS[k % len(_RELLENOS)], f"18/10/2026 {(desde + k) % 24:02d}:15", "Finalizado",
+             "TORRES NIETO ROSA (AUXILIAR)", "SIN NOVEDADES") for k in range(n)]
+
+
+# ALVARADO (en el kardex): 2 informes; el más antiguo va primero en la grilla
+FORMATOS[1] += [
+    (IMG, "17/10/2026 09:12:45", "Finalizado", USUARIO_IMG,
+     _informe("17 de octubre de 2026", "TOMOGRAFÍA", "ABDOMEN SIMPLE",
+              "CONCLUSIÓN: -Hallazgos compatibles con proceso infeccioso de la vesícula biliar.\n"
+              "-Líquido libre en pelvis en mínima cantidad.")),
+    (IMG, "19/10/2026 16:38:38", "Finalizado", USUARIO_IMG,
+     _informe("19 DE OCTUBRE DEL 2026", "ECOGRAFÍA", "TEJIDOS BLANDOS EN LA REGIÓN DORSAL LINEA MEDIA",
+              "Engrosamiento cutáneo\nÁreas líquidas de bordes irregulares, sin tabiques, de 12 x 8 mm.\n"
+              "No se observan colecciones organizadas.\nOPINION: Hallazgos compatibles con proceso inflamatorio "
+              "de tejidos blandos.")),
+]
+# BENAVIDES (en el kardex): 18 formatos = 2 páginas de la grilla sin filtrar; un informe en cada página
+# (el de la página 1 con la fecha del estudio en blanco: se usa la «Fecha Hora» de la grilla)
+FORMATOS[2] += (
+    _relleno(6, 4)                                                                                 # 2-5
+    + [(IMG, "18/10/2026 11:05:10", "Finalizado", USUARIO_IMG,
+        _informe("", "RADIOGRAFÍA", "TORAX PA Y LATERAL",
+                 "Infiltrado alveolar en la base derecha.\nSin derrame pleural.\nSilueta cardiaca normal."))]   # 6 (pág. 1)
+    + _relleno(8, 6)                                                                               # 7-12
+    + [(IMG, "19/10/2026 05:50:00", "Finalizado", USUARIO_IMG,
+        _informe("19/10/2026", "ECOGRAFÍA", "ECO RENAL Y DE VIAS URINARIAS",
+                 "Con transductor convex de 3.5 Mhz se realiza barrido sonográfico observando:\n"
+                 "Riñón derecho de tamaño normal, sin dilatación de la vía urinaria.\n\n"
+                 "Riñón izquierdo con quiste cortical de 14 mm.\nOPINION: Quiste renal simple izquierdo."))]   # 13 (pág. 2)
+    + _relleno(14, 4))                                                                             # 14-17
+assert len(FORMATOS[2]) == 18
+# ROJAS DIAZ (Urgencias) y SIERRA CANO (piso 6): están en el sistema y NO en el kardex (las entregas los mencionan)
+FORMATOS[9] = [
+    (EVOL, "19/10/2026 08:40", "Finalizado", "EMILIANI RUEDA CARLOS",
+     _nota("1. ABDOMEN AGUDO EN ESTUDIO\n2. HTA", "1. NADA VIA ORAL 2. LEV SSN 0.9% 100 CC/H")),
+    (ORDEN, "19/10/2026 08:45", "Finalizado", "EMILIANI RUEDA CARLOS",
+     "NADA VIA ORAL\n1) SOLUCION SALINA 0.9% 1000 CC Cantidad: 4 Dosis: 100 cc/h IV\n"),
+    (IMG, "19/10/2026 14:02:11", "Finalizado", USUARIO_IMG,
+     _informe("19 de octubre del 2026", "TOMOGRAFÍA", "TAC DE ABDOMEN CON CONTRASTE",
+              "CONCLUSIÓN: -Engrosamiento de la pared del apéndice cecal con líquido libre periapendicular.\n"
+              "-Hallazgos sugestivos de apendicitis aguda.")),
+]
+FORMATOS[10] = [
+    (EVOL, "19/10/2026 07:10", "Finalizado", "DAZA PEREZ JUAN",
+     _nota("1. COLECISTITIS AGUDA LITIASICA\n2. DM2", "1. DIETA CORRIENTE 2. CEFTRIAXONA 2 G IV C/24H")),
+    (ORDEN, "19/10/2026 07:15", "Finalizado", "DAZA PEREZ JUAN",
+     "DIETA CORRIENTE\n1) CEFTRIAXONA 2G Cantidad: 1 Dosis: 2 g IV c/24h\n"),
+    (IMG, "19/10/2026 12:20:31", "Finalizado", USUARIO_IMG,
+     _informe("19 DE OCTUBRE DEL 2026", "ECOGRAFÍA", "ABDOMEN TOTAL",
+              "Vesícula biliar de paredes engrosadas con litiasis múltiple.\nVía biliar de calibre normal.\n"
+              "OPINION: Colecistitis aguda litiásica.")),
+]
+# BELTRAN OCHOA (relleno 101): 12 informes = 2 páginas incluso con el filtro «IMAGENOLOG» (el más antiguo primero)
+_TIPOS_IMG = [("ECOGRAFÍA", "ABDOMEN TOTAL"), ("RADIOGRAFÍA", "TORAX PA"), ("TOMOGRAFÍA", "CRANEO SIMPLE"),
+              ("RESONANCIA", "RODILLA DERECHA")]
+FORMATOS[101] = [(EVOL, "19/10/2026 06:00", "Finalizado", "DAZA PEREZ JUAN", _nota("1. POLITRAUMA", "1. NVO"))] + [
+    (IMG, f"{7 + k:02d}/10/2026 {8 + k:02d}:00:00", "Finalizado", USUARIO_IMG,
+     _informe(f"{7 + k} DE OCTUBRE DEL 2026", *_TIPOS_IMG[k % 4], f"Informe inventado {k + 1}.\nSin hallazgos de importancia."))
+    for k in range(12)]
+
 
 # Kardex exportado: (servicio, [(nombre, habitación, dx, evolución, tratamiento, tipo, documento)])
 KARDEX = [
@@ -145,29 +225,95 @@ KARDEX = [
 ]
 
 
+# Documentos de «ENTREGAS» (solo lectura): (nombre del documento, [(título de la tabla, [fila])]) con
+# fila = (habitación, nombre, edad, tipo, documento, DX, EVOLUCIÓN, TRATAMIENTO, LABORATORIOS, IMAGENES / NOTAS,
+# PENDIENTES) y None = fila vacía. Cirugía general se menciona en unas filas (de varias maneras) y en otras no.
+#   PISO 6:  ALVARADO (está en el kardex; menciona en EVOLUCIÓN), SIERRA CANO (NUEVO: está en el sistema y no en el
+#            kardex; menciona en PENDIENTES) y HERRERA (cirugía plástica: no cuenta).
+#   URGENCIAS CARRERA 47: CORREA (kardex, sin mención) y ROJAS DIAZ (NUEVA: Urgencias del sistema, no está en el kardex;
+#            su habitación del sistema no es de piso, así que el servicio sale del documento).
+#   PISO 4C: GUTIERREZ (kardex; menciona) y FORERO (no está en el sistema; cirugía vascular: no cuenta).
+ENTREGAS = [
+    ("PISO 6", [
+        ("PISO 6 ( 3 PACIENTES)", [
+            ("607", "PEDRO PABLO ALVARADO RUIZ", "59", "CC", "1020304051", "COLECISTITIS AGUDA",
+             "19/10/26 VALORACION POR CIRUGIA GENERAL: PROGRAMAR COLECISTECTOMIA", "DIETA LIQUIDA\nCEFAZOLINA 1 G IV C/8H",
+             "", "", "CONTROL DE LABORATORIOS"),
+            ("612", "PEDRO NEL SIERRA CANO", "47", "CC", "1020304060", "COLECISTITIS AGUDA LITIASICA\nDM2",
+             "ESTABLE, SIN FIEBRE", "DIETA CORRIENTE\nCEFTRIAXONA 2 G IV C/24H", "", "ECO ABDOMEN 19/10/26",
+             "VAL X CX GENERAL"),
+            ("615", "GLORIA INES HERRERA VARGAS", "71", "CC", "1020309002", "CELULITIS FACIAL",
+             "VALORACION POR CIRUGIA PLASTICA 18/10/26", "DIETA BLANDA", "", "", "PRE QUIRURGICOS"),
+            None]),
+    ]),
+    ("URGENCIAS CARRERA 47", [
+        ("URGENCIAS 47 ( 2 PACIENTES)", [
+            ("CUB 12", "TOMAS CORREA MEJIA", "62", "CC", "1020304053", "PIELONEFRITIS AGUDA", "ESTABLE", "DIETA BLANDA",
+             "", "", "PENDIENTE UROCULTIVO"),
+            ("CUB 3", "ELSA MARINA ROJAS DIAZ", "55", "CC", "1020304059", "ABDOMEN AGUDO EN ESTUDIO", "EN OBSERVACION",
+             "NADA VIA ORAL", "", "TAC DE ABDOMEN 19/10/26", "A CARGO DE CIRUGIA GENERAL"),
+            None, None]),
+    ]),
+    ("PISO 4C (401-421)", [
+        ("PISO 4C ( 2 PACIENTES) 401 - 421", [
+            ("408", "LAURA GUTIERREZ OSORIO", "34", "TI", "1020304056", "APENDICITIS AGUDA COMPLICADA",
+             "SS VAL CX GENERAL 19/10/26", "DIETA LIQUIDA", "", "", ""),
+            ("415", "HUMBERTO FORERO LEAL", "66", "CC", "1020309001", "HERNIA INCISIONAL",
+             "VALORACION POR CIRUGIA VASCULAR PENDIENTE", "DIETA NORMAL", "", "", "QX PROGRAMADA"),
+            None]),
+    ]),
+]
+_ENCABEZADO = ("<tr><td><p>DATOS</p></td><td><p>DX</p></td><td><p>EVOLUCIÓN</p></td><td><p>TRATAMIENTO</p></td>"
+               "<td><p>LABORATORIOS</p></td><td><p>IMAGENES / NOTAS</p></td><td><p>PENDIENTES</p></td></tr>")
+
+
 # --------------------------------------------------------------------------- páginas
 STUB = """
 window.__grids = {};
 window.ASPxClientControl = { GetControlCollection: function () { return { elements: window.__grids }; } };
-function crearGrilla(id, columnas, filas, pintar) {
-  var estado = { filtro: null, enCallback: false };
+window.ASPx = { GVPagerOnClick: function (g, cmd) { window.__grids[g].pager(cmd); } };
+// op: tam (filas por página), filtro («contiene», «empieza» o «ninguno»: AutoFilterByColumn no hace nada),
+// pag_cliente (false: sin GetPageCount/GotoPage, solo el botón de página siguiente)
+function crearGrilla(id, columnas, filas, pintar, op) {
+  op = op || {};
+  var tam = op.tam || 1000000;
+  var estado = { filtro: null, enCallback: false, pagina: 0 };
+  function callback(fn) {
+    estado.enCallback = true;
+    setTimeout(function () { fn(); pintar(); estado.enCallback = false; }, 150);
+  }
   var g = {
     InCallback: function () { return estado.enCallback; },
     AutoFilterByColumn: function (col, texto) {
-      estado.enCallback = true;
-      setTimeout(function () {
+      if (op.filtro === "ninguno") return;
+      callback(function () {
         estado.filtro = texto ? { col: col, texto: String(texto).toLowerCase() } : null;
-        pintar(); estado.enCallback = false;
-      }, 150);
+        estado.pagina = 0;
+      });
     },
-    visibles: function () {
+    todas: function () {
       return filas().filter(function (f) {
         if (!estado.filtro) return true;
-        var i = columnas.indexOf(estado.filtro.col);
-        return String(f[i]).toLowerCase().indexOf(estado.filtro.texto) === 0;   // «empieza con»
+        var i = columnas.indexOf(estado.filtro.col), v = String(f[i]).toLowerCase();
+        return op.filtro === "empieza" ? v.indexOf(estado.filtro.texto) === 0 : v.indexOf(estado.filtro.texto) >= 0;
+      });
+    },
+    paginas: function () { return Math.max(1, Math.ceil(g.todas().length / tam)); },
+    pagina: function () { return Math.min(estado.pagina, g.paginas() - 1); },
+    visibles: function () { return g.todas().slice(g.pagina() * tam, g.pagina() * tam + tam); },
+    pager: function (cmd) {
+      callback(function () {
+        var n = g.paginas();
+        if (cmd === "PBN") estado.pagina = Math.min(n - 1, estado.pagina + 1);
+        else if (cmd === "PBP") estado.pagina = Math.max(0, estado.pagina - 1);
+        else estado.pagina = Math.max(0, Math.min(n - 1, +cmd.slice(2)));
       });
     }
   };
+  if (op.pag_cliente !== false) {
+    g.GetPageCount = function () { return g.paginas(); };
+    g.GotoPage = function (k) { callback(function () { estado.pagina = Math.max(0, Math.min(g.paginas() - 1, k)); }); };
+  }
   window.__grids[id] = g;
   return g;
 }
@@ -374,11 +520,16 @@ document.getElementById("btnAct").addEventListener("click", function () {
 
 PESTANAS = ["DIAGNOSTICO:", "UNIDAD EN DONDE SE ENCUENTRA EL PACIENTE", "HIPOTESIS DIAGNOSTICA:", "SINTOMAS DESCRITOS:",
             "-EXAMEN FISICO-", "ANALISIS:", "PLAN-", "SOLICITUD MATERIAL ESPECIAL"]
+PESTANAS_IMG = ["EXAMEN", "DESCRIPCIÓN DEL EXAMEN"]
 
 
-def pagina_historia(pid):
+def pagina_historia(pid, cfg=None):
+    """Historia clínica del paciente pid. cfg (la del Simulador): filtro_formatos, tam_formatos y pag_cliente."""
+    cfg = cfg or {}
     nombre = next(p[1] for p in PACIENTES if p[0] == pid)
     formatos = [(f[0], f[1], f[2], f[3], f[4], 22807000 + pid * 100 + i) for i, f in enumerate(FORMATOS[pid])]
+    opciones = {"tam": cfg.get("tam_formatos", 10), "filtro": cfg.get("filtro_formatos", "contiene"),
+                "pag_cliente": cfg.get("pag_cliente", True)}
     return """<!doctype html><html><head><meta charset="utf-8"><title>Historia clínica</title>
 <style>.dxtc-tab{border:1px solid #888;padding:4px 8px;cursor:pointer;width:170px}.dxtc-activeTab{background:#cde}
 .dxtc-content{border:1px solid #888;padding:6px;min-width:520px;min-height:80px}.dxeButtonEdit td{padding:0}</style></head><body>
@@ -390,10 +541,11 @@ def pagina_historia(pid):
 <script>%(stub)s
 var FORMATOS = %(formatos)s;      // [formato, fecha, estado, usuario, detalle, n° de formato]
 var PESTANAS = %(pestanas)s;
+var PESTANAS_IMG = %(pestanas_img)s;
 var COLS = ["N°", "Formato", "Fecha hora", "Estado", "Usuario", "Ver"];
 var g = crearGrilla("%(grid)s", COLS, function () {
   return FORMATOS.map(function (f, i) { return [String(f[5]), f[0], f[1], f[2], f[3], "Ver", i]; });
-}, pintar);
+}, pintar, %(opciones)s);
 function esc(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"); }
 function combo(v) {
   return '<table class="dxeButtonEdit"><tr><td><input type="text" class="dxeEditArea" readonly value="' + esc(v) +
@@ -415,35 +567,46 @@ function contenido(i, d) {      // lo que devuelve el callback de cada pestaña
   else r = "";
   return '<fieldset><legend>' + esc(t) + '</legend><table>' + r + "</table></fieldset>";
 }
+function contenidoImg(i, inf) {  // informe de imagenología: EXAMEN tiene la fecha, el tipo, el estudio y el informe SIN etiqueta
+  var r = "";
+  if (i === 0) r = fila("FECHA DE REALIZACIÓN DEL ESTUDIO", area(inf.fecha)) + fila("TIPO ESTUDIO", combo(inf.tipo)) +
+                   fila("ESTUDIO:", area(inf.estudio)) + "<tr><td></td><td>" + area(inf.texto) + "</td><td></td></tr>";
+  return '<fieldset><legend>' + esc(PESTANAS_IMG[i]) + '</legend><table>' + r + "</table></fieldset>";    // DESCRIPCIÓN: vacía
+}
 function mostrar(f) {
-  var d = f[4], det = document.getElementById("detalle");
-  var titulo = '<div class="dxrp-header"><span>Formato: ' + f[5] + " - " + (f[0] === "ORDEN MEDICA" ? f[0] : f[0] + " MEDICO ESPECIALISTA") + "</span></div>";
+  var d = f[4], det = document.getElementById("detalle"), img = typeof d === "object" && !!d.informe;
+  var nombres = img ? PESTANAS_IMG : PESTANAS;
+  var cont = function (i) { return img ? contenidoImg(i, d.informe) : contenido(i, d); };
+  var titulo = '<div class="dxrp-header"><span>Formato: ' + f[5] + " - " + (f[0] === "HOJA DE EVOLUCION" ? f[0] + " MEDICO ESPECIALISTA" : f[0]) + "</span></div>";
   var pie = "<p>Su nivel de permisos no le permite modificar el formato</p>";
   if (typeof d === "string") { det.innerHTML = titulo + '<textarea id="t1" rows="6" cols="80">' + esc(d) + "</textarea>" + pie; return; }
-  var tabs = PESTANAS.map(function (n, i) {
+  var tabs = nombres.map(function (n, i) {
     return '<tr><td class="dxtc-tab' + (i ? "" : " dxtc-activeTab") + '" data-i="' + i + '"><a class="dxtc-link" href="#"><span class="dx-vam">' + esc(n) + "</span></a></td></tr>";
   }).join("");
-  var conts = PESTANAS.map(function (n, i) {
-    return '<div class="dxtc-content" data-i="' + i + '" style="display:' + (i ? "none" : "block") + '">' + (i ? "" : contenido(0, d)) + "</div>";
+  var conts = nombres.map(function (n, i) {
+    return '<div class="dxtc-content" data-i="' + i + '" style="display:' + (i ? "none" : "block") + '">' + (i || img ? "" : cont(0)) + "</div>";
   }).join("");
   det.innerHTML = titulo + '<table class="dxtcLeft"><tr><td valign="top"><table>' + tabs + '</table></td><td valign="top">' + conts + "</td></tr></table>" + pie;
-  var llenos = { 0: true };
+  var llenos = {};
+  function cargar(i) {       // callback: el contenido llega con retardo
+    llenos[i] = true;
+    var caja = det.querySelector('.dxtc-content[data-i="' + i + '"]');
+    setTimeout(function () { caja.innerHTML = cont(i); }, 300);
+  }
+  if (img) cargar(0); else llenos[0] = true;       // las hojas de evolución traen la 1.ª pestaña ya llena
   Array.prototype.forEach.call(det.querySelectorAll(".dxtc-tab"), function (td) {
     td.addEventListener("click", function (ev) {
       ev.preventDefault();
       var i = +td.getAttribute("data-i");
       Array.prototype.forEach.call(det.querySelectorAll(".dxtc-tab"), function (x) { x.classList.toggle("dxtc-activeTab", x === td); });
       Array.prototype.forEach.call(det.querySelectorAll(".dxtc-content"), function (c) { c.style.display = (+c.getAttribute("data-i") === i) ? "block" : "none"; });
-      if (!llenos[i]) {          // callback: el contenido llega con retardo
-        llenos[i] = true;
-        setTimeout(function () { det.querySelector('.dxtc-content[data-i="' + i + '"]').innerHTML = contenido(i, d); }, 300);
-      }
+      if (!llenos[i]) cargar(i);
     });
   });
 }
 function pintar() {
   var t = document.getElementById("%(grid)s");
-  Array.prototype.slice.call(t.querySelectorAll("tr[id*=_DXDataRow]")).forEach(function (tr) { tr.remove(); });
+  Array.prototype.slice.call(t.querySelectorAll("tr[id*=_DXDataRow], tr[id*=_DXPager]")).forEach(function (tr) { tr.remove(); });
   g.visibles().forEach(function (f, n) {
     var tr = document.createElement("tr"); tr.id = "%(grid)s_DXDataRow" + n;
     for (var i = 0; i < 5; i++) { var td = document.createElement("td"); td.textContent = f[i]; tr.appendChild(td); }
@@ -454,10 +617,23 @@ function pintar() {
     });
     td.appendChild(a); tr.appendChild(td); t.appendChild(tr);
   });
+  var paginas = g.paginas(), pag = g.pagina();
+  if (paginas > 1) {     // pager de DevExpress: resumen «Page 1 of 2 (18 items)», números y botón de página siguiente
+    var pr = document.createElement("tr"); pr.id = "%(grid)s_DXPagerBottom";
+    var pt = document.createElement("td"); pt.colSpan = 6;
+    var h = "<b class='dxp-summary'>Page " + (pag + 1) + " of " + paginas + " (" + g.todas().length + " items)</b> ";
+    for (var k = 0; k < paginas; k++) h += k === pag ? "<b class='dxp-current'>" + (k + 1) + "</b> " :
+      "<a href='#' class='dxp-num' onclick=\\"ASPx.GVPagerOnClick('%(grid)s','PN" + k + "');return false;\\">" + (k + 1) + "</a> ";
+    h += pag < paginas - 1 ? "<a href='#' class='dxp-button' onclick=\\"ASPx.GVPagerOnClick('%(grid)s','PBN');return false;\\">" +
+                             "<img alt='Next' width='12' height='12' src='data:,'>&gt;</a>"
+                           : "<span class='dxp-button dxp-disabled'>&gt;</span>";
+    pt.innerHTML = h; pr.appendChild(pt); t.appendChild(pr);
+  }
 }
 pintar();
-</script></body></html>""" % {"nombre": html.escape(nombre), "grid": GRID_FORM, "stub": STUB,
-                              "formatos": json.dumps(formatos), "pestanas": json.dumps(PESTANAS)}
+</script></body></html>""" % {"nombre": html.escape(nombre), "grid": GRID_FORM, "stub": STUB, "formatos": json.dumps(formatos),
+                              "pestanas": json.dumps(PESTANAS), "pestanas_img": json.dumps(PESTANAS_IMG),
+                              "opciones": json.dumps(opciones)}
 
 
 def _parrafos(lineas):
@@ -489,6 +665,29 @@ def pagina_kardex():
     return "".join(partes)
 
 
+def pagina_entregas(n):
+    """Documento de entregas n (1, 2…) como HTML exportado de Google Docs, igual que el kardex: una tabla por servicio
+    con el título en una celda combinada («PISO 6 ( 3 PACIENTES)»), el encabezado DATOS | DX | … y una fila por
+    paciente (DATOS: habitación, nombre en 1-3 renglones, edad y «CC n»), más filas vacías al final."""
+    nombre, tablas = ENTREGAS[n - 1]
+    partes = [f"<html><head><style>p{{margin:0}}</style></head><body><h1>ENTREGAS CRC {html.escape(nombre)}</h1>"]
+    for titulo, filas in tablas:
+        partes.append(f'<table><tr><td colspan="7"><p>{html.escape(titulo)}</p></td></tr>{_ENCABEZADO}')
+        for f in filas:
+            if f is None:
+                partes.append("<tr>" + "<td><p></p></td>" * 7 + "</tr>")
+                continue
+            hab, pac, edad, tipo, doc, *resto = f
+            palabras = pac.split()
+            renglones = [" ".join(palabras[i:i + 2]) for i in range(0, len(palabras), 2)]
+            celdas = [_parrafos([hab] + renglones + [f"{edad} AÑOS", f"{tipo} {doc}"])]
+            celdas += [_parrafos(t.split("\n")) if t else "<p></p>" for t in resto]
+            partes.append("<tr>" + "".join(f"<td>{c}</td>" for c in celdas) + "</tr>")
+        partes.append("</table>")
+    partes.append("</body></html>")
+    return "".join(partes)
+
+
 # --------------------------------------------------------------------------- servidor
 class Simulador:
     """exige_login: sin cookie de sesión, las páginas protegidas redirigen a /Login.aspx.
@@ -500,13 +699,17 @@ class Simulador:
     id_pend: id distinto para la grilla de pendientes (se encuentra por su título). filtro_contiene: el filtro
     es «contiene» y no «empieza con». campos_legibles: fieldName = título de la columna. autofilter_roto:
     AutoFilterByColumn no hace nada (solo funciona escribir en la fila de filtros). pag_cliente=False: sin
-    GetPageCount/GotoPage (solo el botón de página siguiente)."""
+    GetPageCount/GotoPage (solo el botón de página siguiente; también en la grilla de formatos). filtro_formatos:
+    «contiene», «empieza» (con) o «ninguno» (AutoFilterByColumn de la grilla de formatos no hace nada);
+    tam_formatos: filas por página de la grilla de formatos. entregas_fallan: números de documento de entregas que
+    responden 404."""
 
     def __init__(self, agenda_rota_en=(), exige_login=True, agenda_requiere_menu=True, vence_tras=None,
                  boton_login="image", menu_desplegado=False, con_atendidos=False, tam_atendidos=2, id_pend=None,
                  filtro_contiene=False, campos_legibles=False, autofilter_roto=False, pag_cliente=True,
                  con_atencion_en_menu=True, login_realista=False, iframe=False, sin_titulo=False,
-                 icono_en_cabecera=False, agenda_redirige=False):
+                 icono_en_cabecera=False, agenda_redirige=False, filtro_formatos="contiene", tam_formatos=10,
+                 entregas_fallan=()):
         self.exige_login = exige_login
         self.agenda_requiere_menu = agenda_requiere_menu
         self.vence_tras = vence_tras
@@ -524,13 +727,15 @@ class Simulador:
             id_pend = "ctl00_cph1_ASPxPageControl1_gvOtraTabla"
         self.cfg = {"sin_titulo": sin_titulo, "id_pend": id_pend or GRID_PEND, "id_aten": GRID_ATEN, "con_atendidos": con_atendidos,
                     "tam_pend": 10, "tam_aten": tam_atendidos, "contiene": filtro_contiene,
-                    "campos_legibles": campos_legibles, "autofilter_roto": autofilter_roto, "pag_cliente": pag_cliente}
+                    "campos_legibles": campos_legibles, "autofilter_roto": autofilter_roto, "pag_cliente": pag_cliente,
+                    "filtro_formatos": filtro_formatos, "tam_formatos": tam_formatos}
         self.visitas_agenda = 0
         self.protegidas = 0
         self.logins = 0
         self.actualizaciones = []           # (modo, 24 h) de cada pulsación de «Actualizar»
         self.sesiones = {}                  # sid -> {"menu": bool}
         self.kardex_sirve = True
+        self.entregas_fallan = set(entregas_fallan)      # números de documento de entregas que responden 404
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.puerto = self.httpd.server_address[1]
         self.base = f"http://127.0.0.1:{self.puerto}"
@@ -555,6 +760,15 @@ class Simulador:
     @property
     def url_kardex(self):
         return f"http://localhost:{self.puerto}/kardex"
+
+    def url_entregas(self, n):
+        """URL del documento de entregas n (1, 2…), como las de Google Docs: se descarga tal cual."""
+        return f"http://localhost:{self.puerto}/entregas/{n}"
+
+    @property
+    def entregas(self):
+        """Lista [{nombre, url}] de los documentos de entregas, como `cfg["entregas"]` de la app."""
+        return [{"nombre": nombre, "url": self.url_entregas(n)} for n, (nombre, _) in enumerate(ENTREGAS, 1)]
 
     def _handler(self):
         sim = self
@@ -622,6 +836,11 @@ class Simulador:
                     return self._html("ok")
                 if ruta == "/kardex":
                     return self._html(pagina_kardex()) if sim.kardex_sirve else self._html("no", 404)
+                if ruta.startswith("/entregas/"):
+                    n = ruta.rsplit("/", 1)[1]
+                    if not n.isdigit() or not 1 <= int(n) <= len(ENTREGAS) or int(n) in sim.entregas_fallan:
+                        return self._html("no", 404)
+                    return self._html(pagina_entregas(int(n)))
                 if ruta in ("/dashboard.aspx", "/atencionpacientes.aspx", "/agenda.aspx", "/historiaclinica.aspx", "/otro.aspx", "/menuframe.aspx"):
                     sim.protegidas += 1
                     if ruta == "/agenda.aspx":
@@ -653,7 +872,7 @@ class Simulador:
                         return self._html(pagina_agenda(datos, sim.cfg))
                     try:
                         pid = int(parse_qs(u.query).get("id", ["0"])[0])
-                        return self._html(pagina_historia(pid))
+                        return self._html(pagina_historia(pid, sim.cfg))
                     except (ValueError, StopIteration, KeyError):
                         return self._html("no existe", 404)
                 self._html("no existe", 404)

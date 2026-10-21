@@ -168,7 +168,7 @@ const titulo = () => {
   return c.find(e => !c.some(o => o !== e && e.contains(o))) || null;
 };
 const NOMBRES = ['diagnostico', 'unidad en donde se encuentra el paciente', 'hipotesis diagnostica', 'sintomas descritos',
-                 'examen fisico', 'analisis', 'plan', 'solicitud material especial'];
+                 'examen fisico', 'analisis', 'plan', 'solicitud material especial', 'examen', 'descripcion del examen'];
 const enGrilla = e => !!e.closest('[id^="' + arg.grid + '_"]');
 const pestanas = c => {
   const esTab = e => [...e.classList].some(k => /^dxtc-?(active)?tab$/i.test(k));
@@ -282,6 +282,8 @@ def _fecha(txt):
 
 class Sistema:
     ESPERA_PERSONA = 300      # segundos que se espera a que la persona inicie sesión
+    MAX_IMAGENES = 20         # informes de imagenología que se leen por paciente (los más recientes)
+    MAX_PAGINAS_FORMATOS = 30     # páginas de la grilla de formatos que se recorren como máximo
     MSG_LOGIN_MALO = "Usuario o contraseña de Hospital Office no válidos"
 
     def __init__(self, contexto, cfg, log, carpeta_diag, credenciales=None, progreso=None, cancelado=None,
@@ -300,6 +302,7 @@ class Sistema:
         self._filtros = {}              # grilla -> {columna: texto} filtros puestos en esta carga de la página
         self._cols = {}                 # (grilla, columna) -> (posición, campo) descubiertos
         self._modo_actual = None
+        self._filtro_img = None         # texto con el que el filtro de la grilla de formatos halló imagenología
         self.page = pagina or (contexto.pages[0] if contexto.pages else contexto.new_page())
         self.page.set_default_timeout(20000)
         self._frame = self.page.main_frame   # frame donde se vio la grilla: todas las operaciones sobre ella lo usan
@@ -496,9 +499,38 @@ class Sistema:
           return false;
         """), grid)
 
-    def _leer_todo(self, grid, max_paginas=300):
+    def _clic_marcado(self, grid):
+        """Clic real en el botón del paginador marcado (`data-kardex-sig`) y espera a que la grilla cambie."""
+        antes = self._estado_grilla(grid)
+        self._fr().locator("[data-kardex-sig]").first.click(timeout=5000)
+        self._esperar_cambio(grid, antes[1] if antes else "", minimo=1200)
+
+    def _pagina_siguiente(self, grid):
+        """Pulsa el botón de página siguiente de la grilla y espera a que cambie. False si no hay."""
+        if not self._boton_siguiente(grid):
+            return False
+        self._clic_marcado(grid)
+        return True
+
+    def _numero_de_pagina(self, grid, numero):
+        """Pulsa el enlace con el número de página `numero` (1, 2…) del paginador. False si no hay (p. ej. es la actual)."""
+        hay = self._fr().evaluate(_js("""
+          document.querySelectorAll('[data-kardex-sig]').forEach(e => e.removeAttribute('data-kardex-sig'));
+          for (const z of document.querySelectorAll('[id^="' + arg[0] + '_DXPager"]'))
+            for (const e of z.querySelectorAll('a')) {
+              if (vis(e) && borde(e.innerText) === arg[1]) { e.setAttribute('data-kardex-sig', '1'); return true; }
+            }
+          return false;
+        """), [grid, str(numero)])
+        if hay:
+            self._clic_marcado(grid)
+        return hay
+
+    def _leer_todo(self, grid, max_paginas=300, filas=None):
         """Todas las filas de la grilla, recorriendo sus páginas (GotoPage del cliente DevExpress;
-        respaldo: botón de página siguiente)."""
+        respaldo: botón de página siguiente). `filas`: cómo leer las de la página actual (por defecto `_filas`, las de
+        la Agenda; deben traer «nombre» y «numero»)."""
+        leer = filas or self._filas
         try:
             n = self._js_cliente(grid, "return c.GetPageCount ? c.GetPageCount() : null;")
         except Exception:  # noqa: BLE001
@@ -508,7 +540,7 @@ class Sistema:
             for k in range(min(n, max_paginas)):
                 if k:
                     self._ir_pagina(grid, k)
-                for f in self._filas(grid):
+                for f in leer(grid):
                     f["pagina"] = k
                     todas.append(f)
             if n > 1:
@@ -516,7 +548,7 @@ class Sistema:
             return todas
         todas, vistas = [], set()
         for k in range(max_paginas):
-            filas = self._filas(grid)
+            filas = leer(grid)
             firma = tuple((f["nombre"], f["numero"]) for f in filas)
             if firma in vistas:
                 break
@@ -524,11 +556,8 @@ class Sistema:
             for f in filas:
                 f["pagina"] = k
                 todas.append(f)
-            if not self._boton_siguiente(grid):
+            if not self._pagina_siguiente(grid):
                 break
-            antes = self._estado_grilla(grid)
-            self._fr().locator("[data-kardex-sig]").first.click(timeout=5000)
-            self._esperar_cambio(grid, antes[1] if antes else "", minimo=1200)
         return todas
 
     def _filtro_js(self, grid, campo, texto):
@@ -1043,6 +1072,11 @@ class Sistema:
             with fr.expect_navigation(wait_until="domcontentloaded"):
                 fr.evaluate("() => location.reload()")
 
+    def _recargar_historia(self):
+        """Recarga la historia y espera su grilla de formatos (sin filtros)."""
+        self._recargar()
+        self._fr().wait_for_selector(f"#{GRID_FORM}")
+
     def _leer_textareas(self):
         return self._fr().evaluate("[...document.querySelectorAll('textarea')].map(t=>t.value).join('\\n')")
 
@@ -1071,17 +1105,21 @@ class Sistema:
         arg.update(kw)
         return self._fr().evaluate(_js(_JS_DET + _JS_ESTADO), arg)
 
-    def _leer_formato(self):
+    def _leer_formato(self, omitir=()):
         """Lee el «Detalle del Formato» pestaña por pestaña (clic real en cada una; solo una es visible a la vez).
-        Devuelve {pestaña: {etiqueta: valor, ..., "_texto": textareas unidas}} con pestañas y etiquetas normalizadas
-        (sin tildes, mayúsculas y sin signos en los bordes: «DIAGNOSTICO», «DX», «EXAMEN FISICO»…).
-        Sin pestañas (otro formato) devuelve todo en una sola entrada «FORMATO» con todas las textareas."""
+        Devuelve {pestaña: {etiqueta: valor, ..., "_texto": textareas unidas, "_areas": [(etiqueta, valor)] de las
+        textareas (solo si hay)}} con pestañas y etiquetas normalizadas (sin tildes, mayúsculas y sin signos en los
+        bordes: «DIAGNOSTICO», «DX», «EXAMEN FISICO»…). Una textarea sin etiqueta queda como «CAMPO n».
+        `omitir`: pestañas (ya normalizadas) que no se leen. Sin pestañas (otro formato) devuelve todo en una sola
+        entrada «FORMATO» con todas las textareas."""
         est = self._estado(leer=True)
         if not est or not est["textos"]:
             campos = (est or {}).get("campos") or []
             return {"FORMATO": self._campos_a_dict(campos, self._leer_textareas())}
         res = {}
         for i, nombre in enumerate(est["textos"]):
+            if clave(nombre) in omitir:
+                continue
             self._estado(guardar=True)
             est = self._estado(i=i)
             if est is None or est.get("ausente"):
@@ -1114,15 +1152,25 @@ class Sistema:
 
     @staticmethod
     def _campos_a_dict(campos, texto):
-        d = {}
+        d, areas = {}, []
         for j, c in enumerate(campos, 1):
             k, n = clave(c["etiqueta"]) or f"CAMPO {j}", 2
             base = k
             while k in d:
                 k, n = f"{base} {n}", n + 1
             d[k] = c["valor"]
+            if c["tag"] == "TEXTAREA":
+                areas.append((k, c["valor"]))
         d["_texto"] = texto
+        if areas:
+            d["_areas"] = areas
         return d
+
+    def _clic_ver(self, filas, i):
+        """Pulsa «Ver» de la fila i de la grilla de formatos (`filas`: sus filas de datos). Clic real: por JS no carga."""
+        fila = filas.nth(i)
+        ver = fila.get_by_text("Ver", exact=True)
+        (ver.first if ver.count() else fila.locator("td").last).click()
 
     def _ultimo_formato(self, filtro, preferir_usuarios=(), estructurado=False):
         """Filtra formatos, elige el más reciente (de especialistas si hay) y lo abre con 'Ver'; espera el panel
@@ -1139,9 +1187,7 @@ class Sistema:
         esp = [c for c in cand if any(normalizar(u) in normalizar(c[3]) for u in preferir_usuarios)]
         elegido = max(esp or cand, key=lambda c: c[1])
         antes = self._titulo_detalle()
-        fila = filas.nth(elegido[0])
-        ver = fila.get_by_text("Ver", exact=True)
-        (ver.first if ver.count() else fila.locator("td").last).click()   # clic real: por JS no carga
+        self._clic_ver(filas, elegido[0])
         if not self._esperar_detalle(elegido[4], antes):
             return None
         r = {"fecha": elegido[2], "usuario": elegido[3], "es_especialista": bool(esp), "formato": None}
@@ -1156,6 +1202,119 @@ class Sistema:
                 return r
             self.page.wait_for_timeout(500)
         return None
+
+    # --- informes de imagenología («INFORME DE IMAGENOLOGIA»: pestañas EXAMEN y DESCRIPCIÓN DEL EXAMEN)
+    def _filas_formatos(self, grid=GRID_FORM):
+        """Filas de datos de la página actual de la grilla de formatos (Formato No | Formato | Fecha Hora | Estado |
+        Nombre Usuario | Acción) como dicts: numero, nombre (el formato), fecha, estado, usuario, pagina."""
+        crudo = self._fr().evaluate(_js(
+            "return [...document.querySelectorAll('[id^=\"' + arg + '_DXDataRow\"]')]"
+            ".map(tr => [...tr.children].map(td => (td.innerText || '').trim()));"), grid)
+        return [{"numero": re.sub(r"\D", "", c[0]), "nombre": c[1], "fecha": c[2], "estado": c[3], "usuario": c[4],
+                 "pagina": 0} for c in crudo if len(c) >= 5]
+
+    def _filas_imagenologia(self):
+        """Filas de los informes de imagenología de la historia abierta, de TODAS las páginas de la grilla de formatos
+        (cada una con su «pagina»). Filtra el formato por «IMAGENOLOG»; si el filtro es «empieza con» y no halla nada
+        prueba «INFORME DE IMAGENOLOG». Solo deja las filas cuyo formato dice IMAGENOLOG (por si el filtro no hizo nada)."""
+        for texto in [self._filtro_img] if self._filtro_img else ["IMAGENOLOG", "INFORME DE IMAGENOLOG"]:
+            self._filtrar(GRID_FORM, "Formato", texto)
+            filas = [f for f in self._leer_todo(GRID_FORM, self.MAX_PAGINAS_FORMATOS, self._filas_formatos)
+                     if "IMAGENOLOG" in normalizar(f["nombre"])]
+            if filas:
+                self._filtro_img = texto
+                return filas
+        return []
+
+    def _ir_pagina_formatos(self, k):
+        """Muestra la página k (desde 0) de la grilla de formatos: con GotoPage del cliente DevExpress; sin él, con el
+        número de página del paginador o, si no está, volviendo a filtrar (queda en la 1.ª) y pulsando «siguiente» k veces."""
+        if self._js_cliente(GRID_FORM, "return !!c.GotoPage;"):
+            self._ir_pagina(GRID_FORM, k)
+            return
+        if self._numero_de_pagina(GRID_FORM, k + 1):
+            return
+        self._filtrar(GRID_FORM, "Formato", self._filtro_img or "IMAGENOLOG")
+        for _ in range(k):
+            if not self._pagina_siguiente(GRID_FORM):
+                break
+
+    def _abrir_informe(self, numero, pagina):
+        """Pulsa «Ver» del formato `numero` (clic real) y espera su «Detalle del Formato». Si su fila no está en la
+        página que se ve (la grilla cambió de página o perdió el filtro), va a su página y, si hace falta, vuelve a filtrar."""
+        antes = self._titulo_detalle()
+        i = None
+        for intento in range(3):
+            i = next((k for k, f in enumerate(self._filas_formatos()) if f["numero"] == numero), None)
+            if i is not None or intento == 2:
+                break
+            if intento == 1:
+                self._filtrar(GRID_FORM, "Formato", self._filtro_img or "IMAGENOLOG")
+            self._ir_pagina_formatos(pagina)
+        if i is None:
+            return False
+        self._clic_ver(self._fr().locator(f'[id^="{GRID_FORM}_DXDataRow"]'), i)
+        return self._esperar_detalle(numero, antes)
+
+    @staticmethod
+    def _datos_informe(formato):
+        """fecha_texto / tipo / estudio / texto de la pestaña EXAMEN de un informe de imagenología (`_leer_formato`).
+        Fecha = campo cuya etiqueta empieza por FECHA; tipo = «TIPO ESTUDIO»; estudio = «ESTUDIO»; texto = la textarea
+        SIN etiqueta («CAMPO n») o, si no se distingue, la textarea más larga que no sea fecha/estudio. La pestaña
+        «DESCRIPCIÓN DEL EXAMEN» (vacía) se ignora."""
+        ex = formato.get("EXAMEN")
+        if ex is None:
+            ex = next((v for k, v in formato.items() if k.startswith("EXAMEN")), None)
+        if ex is None:
+            ex = next(iter(formato.values()), {})
+        campos = {k: v for k, v in ex.items() if not k.startswith("_")}
+        buscar = lambda pred: next((k for k in campos if pred(k)), None)  # noqa: E731
+        k_fecha = buscar(lambda k: k.startswith("FECHA"))
+        k_tipo = buscar(lambda k: k == "TIPO ESTUDIO") or buscar(lambda k: k.startswith("TIPO"))
+        k_estudio = buscar(lambda k: k == "ESTUDIO") or buscar(lambda k: k.startswith("ESTUDIO"))
+        propios = {k_fecha, k_tipo, k_estudio}
+        areas = [(k, v) for k, v in ex.get("_areas", []) if k not in propios and (v or "").strip()]
+        sin_etiqueta = [a for a in areas if re.fullmatch(r"CAMPO \d+", a[0])]
+        texto = max(sin_etiqueta or areas, key=lambda a: len(a[1]), default=("", ""))[1]
+        dato = lambda k: (campos.get(k) or "").strip() if k else ""  # noqa: E731
+        return {"fecha_texto": dato(k_fecha), "tipo": dato(k_tipo), "estudio": dato(k_estudio),
+                "texto": texto.replace("\r", "").strip()}
+
+    def _leer_imagenes(self):
+        """Con la historia abierta (grilla de formatos visible): lee los informes de imagenología de TODAS las páginas
+        de la grilla (como mucho `MAX_IMAGENES`, los más recientes) abriendo cada uno con «Ver». Devuelve una lista de
+        dicts {"numero", "fecha_grilla", "fecha_texto", "tipo", "estudio", "texto"}, del más reciente al más antiguo.
+        Un error en un informe se anota en el registro y se sigue con los demás."""
+        filas = sorted(self._filas_imagenologia(), key=lambda f: _fecha(f["fecha"]), reverse=True)[:self.MAX_IMAGENES]
+        estudios = []
+        for f in filas:
+            try:
+                if not self._abrir_informe(f["numero"], f["pagina"]):
+                    raise ErrorApp("otro", "no se abrió su detalle")
+                d = self._datos_informe(self._leer_formato(omitir=("DESCRIPCION DEL EXAMEN",)))
+            except Cancelado:
+                raise
+            except Exception as e:  # noqa: BLE001
+                self.log(f"  no pude leer el informe de imagenología {f['numero']}: {_primera_linea(e)}")
+                continue
+            if d["tipo"] or d["estudio"] or d["texto"]:
+                estudios.append({"numero": f["numero"], "fecha_grilla": f["fecha"], **d})
+        return estudios
+
+    def _guardar_imagenes(self, p):
+        """Lee los informes de imagenología de la historia (recargándola) y los deja en p.imagenes como
+        notas.EstudioImagen. Un fallo solo se anota en el registro: no tumba al paciente."""
+        try:
+            import notas
+            Estudio = notas.EstudioImagen
+            self._recargar_historia()
+            p.imagenes = [Estudio(fecha=notas.fecha_corta(d["fecha_texto"], respaldo=d["fecha_grilla"]), tipo=d["tipo"],
+                                  estudio=d["estudio"], texto=d["texto"], numero=d["numero"])
+                          for d in self._leer_imagenes()]
+        except Cancelado:
+            raise
+        except Exception as e:  # noqa: BLE001
+            self.log(f"  {p.nombre}: no pude leer las imágenes ({_primera_linea(e)})")
 
     @staticmethod
     def _interpretar_formato(formato, texto, fecha, medico):
@@ -1179,7 +1338,7 @@ class Sistema:
         return {"dx": dx, "evolucion": evolucion, "plan": plan}
 
     def detalle(self, p):
-        """Rellena dx/evolución/tratamiento de p. Devuelve p."""
+        """Rellena dx/evolución/tratamiento y las imágenes de p. Devuelve p."""
         try:
             if not self._atender(p):
                 p.aviso = "No pude abrir su historia desde la Agenda (no encontré «Atender»)."
@@ -1198,8 +1357,7 @@ class Sistema:
             p.dx, p.evolucion = info["dx"], info["evolucion"]
             ordenes = []
             try:
-                self._recargar()
-                self._fr().wait_for_selector(f"#{GRID_FORM}")
+                self._recargar_historia()
                 od = self._ultimo_formato("ORDEN M")
                 if od:
                     ordenes = interpretar_ordenes(od["texto"])
@@ -1207,6 +1365,7 @@ class Sistema:
                 self.log(f"  {p.nombre}: no pude leer las órdenes médicas")
             p.tratamiento = construir_tratamiento(info["plan"], ordenes, p.tratamiento, ev["usuario"], fecha)
             p.encontrado_detalle = True
+            self._guardar_imagenes(p)
         except Cancelado:
             raise
         except ErrorApp as e:
