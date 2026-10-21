@@ -1034,17 +1034,6 @@ class Sistema:
                 return r[0]
         return None
 
-    def leer_atendidos(self):
-        """Pacientes de la grilla de atendidos (todas sus páginas), de ambos modos. Lista vacía si no existe."""
-        res = []
-        for modo in MODOS:
-            self.ir_agenda()
-            self._modo(modo)
-            if not self._buscar_grillas()[1]:
-                continue
-            res += [self._paciente(f, modo) for f in self._leer_todo(self.grid_aten)]
-        return res
-
     # ------------------------------------------------------------ historia
     def _atender(self, p):
         self.ir_agenda()

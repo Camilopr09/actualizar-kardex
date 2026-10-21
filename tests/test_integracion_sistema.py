@@ -37,14 +37,19 @@ def _nav_global(nav):
     NAV = nav
 
 
-def _cfg(sim):
-    return {"url_kardex": sim.url_kardex, "url_agenda": sim.url_agenda,
-            "especialistas": ["DAZA", "FABIAN", "EMILIANI"], "navegador": "chrome"}
+def _cfg(sim, entregas=None):
+    """Config de la app contra el simulador; con `entregas` ([{nombre, url}], p. ej. `sim.entregas`) lee esos documentos."""
+    cfg = {"url_kardex": sim.url_kardex, "url_agenda": sim.url_agenda,
+           "especialistas": ["DAZA", "FABIAN", "EMILIANI"], "navegador": "chrome"}
+    if entregas is not None:
+        cfg["entregas"] = entregas
+    return cfg
 
 
-def _analizar(sim, cancelado=lambda: False):
+def _analizar(sim, cancelado=lambda: False, entregas=None):
     registro, avance = [], []
-    res = flujo.analizar(NAV, _cfg(sim), registro.append, lambda i, n, nombre: avance.append((i, n, nombre)), cancelado)
+    res = flujo.analizar(NAV, _cfg(sim, entregas), registro.append, lambda i, n, nombre: avance.append((i, n, nombre)),
+                         cancelado)
     return res, registro, avance
 
 
@@ -121,9 +126,11 @@ def test_analizar_contra_el_simulador():
     # ---- habitaciones: «607» ≡ «6PISO-607», «426» ≡ «4PISO-426», «CUB 9» ≡ «H4CAM-09», PASILLO no se compara
     for nombre in ("PEDRO ALVARADO", "SOFIA BENAVIDES LUNA", "IVAN ESCOBAR TRUJILLO", "HERNAN PALACIOS"):
         assert not _acc(acciones, nombre, "REVISAR", "HABITACIÓN"), nombre
-    hab = _acc(acciones, "LAURA GUTIERREZ OSORIO", "REVISAR", "HABITACIÓN")
-    assert len(hab) == 1 and (hab[0].actual, hab[0].nuevo) == ("405", "4PISO-408")
-    assert len([x for x in acciones if x.campo == "HABITACIÓN"]) == 1
+    # GUTIERREZ: el kardex dice 405 y el sistema 4PISO-408 (misma tabla de piso 4) -> se cambia solo el renglón de la habitación
+    hab = _acc(acciones, "LAURA GUTIERREZ OSORIO", "ACTUALIZAR", "HABITACIÓN")
+    assert len(hab) == 1 and (hab[0].actual, hab[0].nuevo, hab[0].habitacion_nueva) == ("405", "408", "408")
+    assert hab[0].automatica and hab[0].marcada and not _acc(acciones, "LAURA GUTIERREZ OSORIO", "REVISAR")
+    assert len([x for x in acciones if x.campo == "HABITACIÓN"]) == 1 and not [x for x in acciones if x.tipo == "MOVER"]
 
     # ---- HERNAN PALACIOS: el nombre del kardex no se parece, pero el documento coincide
     j = por["JAIRO ANDRES MONTENEGRO VEGA"]
@@ -134,14 +141,80 @@ def test_analizar_contra_el_simulador():
     # ---- RETIRAR: no aparece en ningún modo (y no se confunde con la tocaya ELSA MARINA ROJAS DIAZ)
     ret = [x for x in acciones if x.tipo == "RETIRAR"]
     assert [x.paciente for x in ret] == ["ELSA FIGUEROA PARDO"] and ret[0].servicio == "URGENCIAS"
-    # ---- AGREGAR: sin lista de atendidos no se propone ningún paciente (la lista general es de todo el hospital)
-    assert not [x for x in acciones if x.tipo == "AGREGAR"]
-    assert registro.count("No hay lista de pacientes atendidos: no se proponen pacientes nuevos") == 1
+    # ---- AGREGAR: solo salen de los documentos de entregas (aquí no hay ninguno configurado): la lista general
+    # del hospital no se trae
+    assert not [x for x in acciones if x.tipo == "AGREGAR"] and not any("ntregas" in linea for linea in registro)
     assert any("Leyendo la Agenda" in linea for linea in registro)
+
+    # ---- IMÁGENES / NOTAS: los informes de imagenología de la historia (la kardex trae la celda vacía)
+    assert [(e.fecha, e.tipo, e.numero) for e in a.imagenes] == [("19/10/26", "ECOGRAFÍA", "22807105"),
+                                                                 ("17/10/26", "TOMOGRAFÍA", "22807104")]
+    (im,) = _acc(acciones, "PEDRO ALVARADO", "ACTUALIZAR", "IMÁGENES / NOTAS")
+    assert im.automatica and im.marcada and im.detalle == "2 estudio(s) nuevo(s) de imágenes"
+    assert im.actual == "" and im.insertar == im.nuevo and im.insertar.splitlines()[0] == (
+        "ECOGRAFÍA TEJIDOS BLANDOS EN LA REGIÓN DORSAL LINEA MEDIA 19/10/26")
+    assert "\nTOMOGRAFÍA ABDOMEN SIMPLE 17/10/26\nCONCLUSIÓN: -Hallazgos" in im.insertar
+    # BENAVIDES: dos informes en distintas páginas de su grilla de formatos (uno con la fecha del estudio en blanco)
+    assert [(e.fecha, e.numero) for e in b.imagenes] == [("19/10/26", "22807213"), ("18/10/26", "22807206")]
+    (imb,) = _acc(acciones, "SOFIA BENAVIDES LUNA", "ACTUALIZAR", "IMÁGENES / NOTAS")
+    assert imb.insertar.splitlines()[0] == "ECO RENAL Y DE VIAS URINARIAS 19/10/26" and "RADIOGRAFÍA TORAX PA Y LATERAL 18/10/26" in imb.insertar
+    # los demás no tienen informes de imagenología
+    assert len([x for x in acciones if x.campo == "IMÁGENES / NOTAS"]) == 2
+    assert not any(p.imagenes for p in pacientes if p.nombre not in ("PEDRO PABLO ALVARADO RUIZ", "SOFIA BENAVIDES LUNA"))
+
+
+def test_analizar_con_entregas_agrega_a_los_pacientes_nuevos_con_cirugia():
+    # 3 documentos de entregas: 4 pacientes con valoración por cirugía general (ALVARADO y GUTIERREZ ya están en el
+    # kardex; SIERRA CANO y ROJAS DIAZ no) y 3 que no la mencionan (HERRERA: cirugía plástica; CORREA; FORERO: vascular)
+    with Simulador() as sim:
+        (pacientes, kardex, acciones), registro, avance = _analizar(sim, entregas=sim.entregas)
+    por = {p.nombre: p for p in pacientes}
+    assert "Leyendo 3 documentos de entregas…" in registro
+    assert "Entregas: 4 pacientes con valoración por cirugía general, 2 que no están en el kardex" in registro
+    # el avance cuenta los 8 del kardex y los 2 candidatos nuevos; la tocaya de ELSA FIGUEROA no se confunde
+    assert [(i, n) for i, n, _ in avance] == [(i, 10) for i in range(1, 11)] and avance[-1][2] == "ELSA MARINA ROJAS DIAZ"
+    assert len(pacientes) == 9 and por["PEDRO NEL SIERRA CANO"].modo == "Hospitalización"
+    assert por["ELSA MARINA ROJAS DIAZ"].modo == "Urgencias" and por["PEDRO NEL SIERRA CANO"].encontrado_detalle
+    assert [x.paciente for x in acciones if x.tipo == "RETIRAR"] == ["ELSA FIGUEROA PARDO"]
+    assert not [x for x in acciones if x.tipo == "MOVER"]
+    assert [x.paciente for x in acciones if x.tipo == "REVISAR"] == ["MARIA DUQUE SALAS"]       # solo su hoja de enfermería
+
+    # ---- AGREGAR: solo los dos que no están en el kardex (se escribe: automática y marcada), cada uno en su tabla
+    ag = {x.paciente: x for x in acciones if x.tipo == "AGREGAR"}
+    assert sorted(ag) == ["ELSA MARINA ROJAS DIAZ", "PEDRO NEL SIERRA CANO"]
+    a6 = ag["PEDRO NEL SIERRA CANO"]          # habitación de piso (6PISO-612) -> tabla «PISO 6» del kardex (la 1.ª)
+    assert a6.automatica and a6.marcada and (a6.destino, a6.servicio, a6.tabla_destino) == ("PISO 6", "PISO 6", 0)
+    assert a6.fila_nueva == {
+        "DATOS": "612\nPEDRO NEL SIERRA CANO\n47 AÑOS\nCC 1020304060",
+        "DX": "1. COLECISTITIS AGUDA LITIASICA\n2. DM2",
+        "EVOLUCIÓN": "19/10/2026 - DR. DAZA PEREZ JUAN (MEDICINA INTERNA)\nEVOLUCION FAVORABLE",
+        "TRATAMIENTO": "PLAN\n1. DIETA CORRIENTE\n2. CEFTRIAXONA 2 G IV C/24H",
+        "IMÁGENES / NOTAS": "ECOGRAFÍA ABDOMEN TOTAL 19/10/26\nVesícula biliar de paredes engrosadas con litiasis múltiple.\n"
+                            "Vía biliar de calibre normal.\nOPINION: Colecistitis aguda litiásica."}
+    ur = ag["ELSA MARINA ROJAS DIAZ"]         # «H4CAM-03» no es de piso: el servicio sale del documento «URGENCIAS CARRERA 47»
+    assert ur.automatica and ur.marcada and (ur.destino, ur.tabla_destino) == ("URGENCIAS", 2)
+    assert ur.fila_nueva["DATOS"] == "CUB 3\nELSA MARINA ROJAS DIAZ\n55 AÑOS\nCC 1020304059"        # la habitación de la entrega
+    assert ur.fila_nueva["IMÁGENES / NOTAS"].splitlines()[0] == "TAC DE ABDOMEN CON CONTRASTE 19/10/26"
+    assert ur.fila_nueva["TRATAMIENTO"] == "PLAN\n1. NADA VIA ORAL\n2. LEV SSN 0.9% 100 CC/H"
+
+    # ---- IMÁGENES / NOTAS de los que ya estaban en el kardex (ALVARADO y BENAVIDES), como siempre
+    assert {x.paciente for x in acciones if x.campo == "IMÁGENES / NOTAS"} == {"PEDRO ALVARADO", "SOFIA BENAVIDES LUNA"}
+    assert len(por["PEDRO PABLO ALVARADO RUIZ"].imagenes) == 2 and len(por["SOFIA BENAVIDES LUNA"].imagenes) == 2
+
+
+def test_documento_de_entregas_que_falla_se_anota_y_se_sigue():
+    with Simulador(entregas_fallan=[2]) as sim:               # «URGENCIAS CARRERA 47» responde 404
+        (pacientes, _, acciones), registro, avance = _analizar(sim, entregas=sim.entregas)
+    rev = [x for x in acciones if x.tipo == "REVISAR" and "documento de entregas" in x.detalle]
+    assert len(rev) == 1 and rev[0].paciente == "URGENCIAS CARRERA 47" and not rev[0].automatica and not rev[0].marcada
+    assert any("No pude leer las entregas URGENCIAS CARRERA 47" in linea for linea in registro)
+    # los otros dos documentos se leyeron: SIERRA CANO se agrega, ROJAS DIAZ (solo en el documento caído) no
+    assert [x.paciente for x in acciones if x.tipo == "AGREGAR"] == ["PEDRO NEL SIERRA CANO"]
+    assert len(pacientes) == 8 and len(avance) == 9 and "ELSA MARINA ROJAS DIAZ" not in {p.nombre for p in pacientes}
 
 
 @pytest.mark.parametrize("pag_cliente", [True, False])
-def test_agregar_solo_desde_atendidos_con_paginacion(pag_cliente):
+def test_grilla_de_atendidos_sirve_para_buscar_pero_no_para_proponer(pag_cliente):
     # la grilla de atendidos (inexistente en el sistema real; respaldo) tiene páginas de 2 filas:
     # GUTIERREZ y DUQUE (del kardex) en la 1.ª y QUIJANO (no está en el kardex) en la 2.ª
     with Simulador(con_atendidos=True, tam_atendidos=2, pag_cliente=pag_cliente) as sim:
@@ -149,12 +222,9 @@ def test_agregar_solo_desde_atendidos_con_paginacion(pag_cliente):
     por = {p.nombre: p for p in pacientes}
     # los del kardex que ya fueron atendidos se encuentran en la grilla de atendidos y se leen completos
     assert por["MARIA ELENA DUQUE SALAS"].aviso and por["LAURA GUTIERREZ OSORIO"].encontrado_detalle
-    ag = [x for x in acciones if x.tipo == "AGREGAR"]
-    assert [x.paciente for x in ag] == ["ROSARIO QUIJANO LOPEZ"] and not ag[0].automatica and not ag[0].marcada
-    assert ag[0].habitacion == "3PISO-311"
-    # nunca de la lista «Pacientes Por Atender» (ELSA MARINA ROJAS DIAZ, PEDRO NEL SIERRA CANO, rellenos…)
-    assert len(pacientes) == 8 and len(ag) == 1
-    assert not any("No hay lista de pacientes atendidos" in linea for linea in registro)
+    # pero ya no se propone agregar a nadie sacado del sistema (QUIJANO no está en ninguna entrega ni en el kardex)
+    assert not [x for x in acciones if x.tipo == "AGREGAR"] and "ROSARIO QUIJANO LOPEZ" not in por
+    assert len(pacientes) == 7              # solo los del kardex que están en el sistema
 
 
 def test_cancelar_se_revisa_antes_de_cada_paciente():
