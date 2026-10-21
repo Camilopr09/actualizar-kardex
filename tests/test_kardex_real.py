@@ -61,6 +61,19 @@ def test_titulos():
     assert t("PISO 5 (  PACIENTES)") == "PISO 5"
     assert t("URGENCIAS 47 ( 5 PACIENTES)") == "URGENCIAS 47"
     assert t("UCI 1  (2 PACIENTES)") == "UCI 1"
+    assert t("PISO 4A ( 4 PACIENTES) 422 - 430") == "PISO 4A"
+    assert t("PISO 4B ( 3 PACIENTES) 430 EN ADELANTE") == "PISO 4B" and t("PISO 4C ( 6 PACIENTES) 401 - 421") == "PISO 4C"
+
+
+def test_columna_imagenes_por_encabezado():
+    f = parsear_kardex_html(HTML)
+    assert [x.col_imagenes for x in f[:4]] == [5] * 4 and f[4].col_imagenes == 4          # UCI 1 (6 columnas) la tiene en la 4
+    html = ("<table><tr><td colspan='7'>PISO 6 (1 PACIENTES)</td></tr>" + ENC7 + "<tr>" + _td("607", "A B") + "<td></td>" * 4
+            + _td("TAC DE ABDOMEN 16/10/26", "CONCLUSIÓN: algo") + "<td></td></tr></table>")
+    (g,) = parsear_kardex_html(html)
+    assert g.imagenes == "TAC DE ABDOMEN 16/10/26\nCONCLUSIÓN: algo" and g.col_imagenes == 5
+    sin = "<table><tr><td>DATOS</td><td>DX</td></tr><tr><td>607<br>A B</td><td>x</td></tr></table>"
+    assert parsear_kardex_html(sin)[0].col_imagenes is None and parsear_kardex_html(sin)[0].imagenes == ""
 
 
 def test_variantes_de_datos():

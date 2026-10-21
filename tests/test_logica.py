@@ -48,7 +48,7 @@ def test_html_y_comparar():
     acc = comparar([p, q], filas)
     tipos = [(a.tipo, a.campo) for a in acc]
     assert ("ACTUALIZAR", "DX") in tipos and ("REVISAR", "HABITACIÓN") in tipos
-    assert any(a.tipo == "AGREGAR" for a in acc) and any(a.tipo == "RETIRAR" for a in acc)
+    assert any(a.tipo == "RETIRAR" for a in acc) and not any(a.tipo == "AGREGAR" for a in acc)   # q solo está en el sistema
 
 
 DX_B = ("EVOLUCION UCI/ AM\n\n- SHOCK DISTRIBUTIVO/ HIPOVOLÉMICO\nEN VMI\n- SEPSIS FOCO BILIAR\n"

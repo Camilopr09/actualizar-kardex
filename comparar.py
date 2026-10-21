@@ -2,7 +2,7 @@
 import re
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
-from notas import normalizar
+from notas import imagenes_nuevas, insertar_imagenes, menciona_cirugia, normalizar, unir_bloques
 
 
 @dataclass
@@ -21,6 +21,22 @@ class PacienteSistema:
     tipo_documento: str = ""
     admision: str = ""
     estado: str = ""
+    imagenes: list = field(default_factory=list)    # list[notas.EstudioImagen] de los informes de imagenología
+    edad: str = ""
+
+
+@dataclass
+class PacienteEntrega:
+    """Una fila con paciente de un documento «ENTREGAS CRC» (solo se lee, nunca se escribe)."""
+    nombre: str
+    documento: str = ""         # solo el número
+    tipo_documento: str = ""
+    edad: str = ""
+    habitacion: str = ""
+    datos: str = ""             # texto de la celda DATOS tal cual
+    texto: str = ""             # todo el texto de la fila (para menciona_cirugia)
+    doc: str = ""               # nombre del documento de entregas («PISO 6»)
+    servicio: str = ""          # título limpio de la tabla donde está (si hay)
 
 
 _TIPOS_DOC = ("CC", "TI", "RC", "CE", "PA", "PE", "PT", "MS", "AS", "CN", "NIT", "PP")
@@ -129,6 +145,8 @@ class FilaKardex:
     col_dx: object = 1
     col_evolucion: object = 2
     col_tratamiento: object = 3
+    imagenes: str = ""              # celda «IMAGENES / NOTAS»
+    col_imagenes: object = None
 
     @property
     def nombre(self):
@@ -154,7 +172,7 @@ class FilaKardex:
 
 @dataclass
 class Accion:
-    tipo: str               # ACTUALIZAR | AGREGAR | RETIRAR | REVISAR
+    tipo: str               # ACTUALIZAR | AGREGAR | MOVER | RETIRAR | REVISAR
     paciente: str
     campo: str = ""
     actual: str = ""
@@ -165,10 +183,28 @@ class Accion:
     servicio: str = ""
     habitacion: str = ""
     sis: object = None      # PacienteSistema relacionado (o None)
+    destino: str = ""       # MOVER / AGREGAR: servicio de la tabla destino
+    tabla_destino: object = None    # MOVER / AGREGAR: índice de esa tabla en el documento (None = no se sabe)
+    insertar: str = ""      # IMÁGENES / NOTAS: texto que se INSERTA en la celda (no la reemplaza)
+    fila_nueva: dict = field(default_factory=dict)  # AGREGAR: columna -> texto de la fila nueva
+    habitacion_nueva: str = ""      # HABITACIÓN / MOVER: código de habitación que queda en DATOS
 
     @property
     def automatica(self):
-        return self.tipo == "ACTUALIZAR" and self.fila is not None
+        """Se puede escribir sola: ACTUALIZAR de una fila, MOVER a una tabla conocida o AGREGAR a una tabla conocida."""
+        return ((self.tipo == "ACTUALIZAR" and self.fila is not None)
+                or (self.tipo == "MOVER" and self.fila is not None and self.tabla_destino is not None)
+                or (self.tipo == "AGREGAR" and self.tabla_destino is not None))
+
+
+@dataclass
+class TablaKardex:
+    """Una tabla (servicio) del kardex, para decidir a cuál va un paciente según su habitación."""
+    indice: int             # posición entre las tablas del documento (igual que FilaKardex.tabla)
+    servicio: str           # título limpio: «PISO 4A»
+    titulo: str = ""        # título tal cual: «PISO 4A ( 4 PACIENTES) 422 - 430»
+    rango: object = None    # (desde, hasta) de habitaciones; hasta=None: «430 EN ADELANTE»; None: sin rango
+    filas_pacientes: int = 0
 
 
 def _tokens(nombre):
@@ -247,6 +283,54 @@ def misma_habitacion(kardex, sistema):
     return _sin_ceros(k) == _sin_ceros(s.rsplit("-", 1)[-1])
 
 
+_RE_COD_PISO = re.compile(r"(?<!\d)(\d{3,4}[A-Z]?)$")
+
+
+def codigo_kardex(hab_sistema):
+    """Habitación como se escribe en el kardex: «6PISO-607» -> «607», «3PISO-305B» -> «305B», «10PISO-1001A» -> «1001A».
+    Solo si el código del sistema es de piso (trae PISO, o su parte final es un número de 3-4 dígitos con letra
+    opcional); si no («HOS82-09», «UCI5-09», «PEDIA-07», «PASILLO») devuelve ''."""
+    t = normalizar(hab_sistema).replace(" ", "")
+    final = t.rsplit("-", 1)[-1]
+    if "PISO" in t:
+        m = _RE_COD_PISO.search(final)
+    else:
+        m = _RE_COD_PISO.fullmatch(final)
+    return m.group(1) if m else ""
+
+
+def _palabras_servicio(texto):
+    """Palabras comparables de un servicio o del nombre de un documento de entregas."""
+    t = re.sub(r"\bPISOS\b", "PISO", normalizar(texto))
+    return {w for w in re.findall(r"[A-Z0-9]+", t) if w not in ("CARRERA", "CALLE", "CRA", "CL")}
+
+
+def servicio_destino(hab_sistema, tablas, doc_entregas=""):
+    """TablaKardex a la que va un paciente según su habitación del sistema, o None si no se sabe.
+    1. Con código de piso (607, 305B, 1001A): piso = número // 100 y candidatas «PISO <piso>[letra]»; con varias
+       (4A, 4B, 4C) la que tenga la habitación en su rango (la primera si dos la tienen, p. ej. 430); si ninguna, None.
+    2. Sin código (o sin tablas candidatas): la tabla cuyas palabras estén todas en el nombre del documento de
+       entregas donde aparece el paciente («URGENCIAS CARRERA 47» -> «URGENCIAS 47»); si coinciden varias
+       («PISOS 10 Y 11») o ninguna, None."""
+    tablas = list(tablas)
+    codigo = codigo_kardex(hab_sistema)
+    if codigo:
+        n = int(re.sub(r"\D", "", codigo))
+        piso = n // 100
+        cand = [t for t in tablas if re.match(r"PISO\s*%d[A-Z]?(?![A-Z0-9])" % piso, normalizar(t.servicio))]
+        if len(cand) == 1:
+            return cand[0]
+        if cand:
+            return next((t for t in cand if t.rango and t.rango[0] <= n and (t.rango[1] is None or n <= t.rango[1])),
+                        None)
+    palabras_doc = _palabras_servicio(doc_entregas)
+    if palabras_doc:
+        cand = [t for t in tablas if _palabras_servicio(t.servicio) and _palabras_servicio(t.servicio) <= palabras_doc]
+        if len(cand) == 1:
+            return cand[0]
+    return None
+
+
 def emparejar(nombre_kardex, candidatos, documento=""):
     """Busca el nombre del kardex entre los nombres del sistema. Tolera errores de escritura,
     tildes y el orden APELLIDOS NOMBRES. Devuelve None si no hay coincidencia clara o si dos
@@ -315,10 +399,100 @@ def _resumen(nombre, habitacion, dx="", fecha="", medico=""):
     return "\n".join(lineas)
 
 
-def comparar(sistema, kardex):
-    """Devuelve lista de Accion. sistema: list[PacienteSistema], kardex: list[FilaKardex]."""
+def candidatos_cirugia(entregas):
+    """Pacientes de los documentos de entregas cuya fila menciona valoración por cirugía general, sin repetidos
+    (mismo documento o mismo nombre)."""
+    out = []
+    for e in entregas:
+        if not menciona_cirugia(e.texto):
+            continue
+        doc = re.sub(r"\D", "", e.documento or "")
+        if any((doc and doc == re.sub(r"\D", "", x.documento or "")) or normalizar(e.nombre) == normalizar(x.nombre)
+               for x in out):
+            continue
+        out.append(e)
+    return out
+
+
+_COLUMNAS_FILA_NUEVA = ("DATOS", "DX", "EVOLUCIÓN", "TRATAMIENTO", "IMÁGENES / NOTAS")
+
+
+def _datos_fila_nueva(p, e, nombre):
+    """Celda DATOS de un paciente nuevo: habitación, nombre (como está en la entrega), edad y «CC 123»."""
+    hab = codigo_kardex(p.habitacion) or e.habitacion
+    doc = e.documento or p.documento
+    ident = " ".join(x for x in ((e.tipo_documento or p.tipo_documento) if doc else "", doc) if x)
+    return "\n".join(x for x in (hab, nombre, e.edad or p.edad, ident) if x)
+
+
+def _agregar(p, e, tablas):
+    """Acción AGREGAR de un paciente que está en las entregas (con cirugía) y no en el kardex."""
+    d = servicio_destino(p.habitacion, tablas, e.doc)
+    codigo = codigo_kardex(p.habitacion)
+    nombre = " ".join((e.nombre or p.nombre).upper().split())
+    fila = {"DATOS": _datos_fila_nueva(p, e, nombre), "DX": p.dx, "EVOLUCIÓN": p.evolucion, "TRATAMIENTO": p.tratamiento,
+            "IMÁGENES / NOTAS": unir_bloques(imagenes_nuevas(p.imagenes, ""))}
+    fila = {c: t for c, t in fila.items() if t}
+    nuevo = "\n\n".join(f"{c}\n{fila[c]}" for c in _COLUMNAS_FILA_NUEVA if c in fila)
+    donde = f"en las entregas ({e.doc})" if e.doc else "en las entregas"
+    aviso = f". Aviso: {p.aviso}" if p.aviso else ""
+    if d is None:
+        return Accion("AGREGAR", nombre, "", "", nuevo, None,
+                      f"No sé en qué tabla va (habitación {p.habitacion or 'sin dato'}): agrégalo a mano. "
+                      f"Está {donde} con valoración por cirugía y no en el kardex" + aviso,
+                      marcada=False, servicio=e.servicio or e.doc or p.modo, habitacion=codigo or p.habitacion,
+                      sis=p, fila_nueva=fila, habitacion_nueva=codigo)
+    return Accion("AGREGAR", nombre, "", "", nuevo, None,
+                  f"Está {donde} con valoración por cirugía y no en el kardex: fila nueva en {d.servicio}" + aviso,
+                  servicio=d.servicio, habitacion=codigo or p.habitacion, sis=p, destino=d.servicio,
+                  tabla_destino=d.indice, fila_nueva=fila, habitacion_nueva=codigo)
+
+
+def _otra_tabla(fila, p, tablas, entregas):
+    """True si la habitación del sistema es de piso y lleva a una tabla del kardex distinta de la de la fila."""
+    if not codigo_kardex(p.habitacion):
+        return False
+    ent = buscar_paciente(fila.nombre, fila.documento, entregas)
+    d = servicio_destino(p.habitacion, tablas, ent.doc if ent else "")
+    return d is not None and d.indice != fila.tabla and normalizar(d.servicio) != normalizar(fila.servicio)
+
+
+def _cambio_de_habitacion(fila, p, tablas, entregas):
+    """Qué hacer cuando la habitación del sistema no coincide con la del kardex (lista de Accion)."""
+    codigo = codigo_kardex(p.habitacion)
+    revisar = Accion("REVISAR", fila.nombre, "HABITACIÓN", fila.habitacion, p.habitacion, fila,
+                     "Habitación distinta (cambiar a mano; puede requerir mover de servicio)",
+                     marcada=False, servicio=fila.servicio, habitacion=fila.habitacion, sis=p)
+    if not codigo:
+        return [revisar]
+    ent = buscar_paciente(fila.nombre, fila.documento, entregas)
+    d = servicio_destino(p.habitacion, tablas, ent.doc if ent else "")
+    if d is None:
+        revisar.detalle = ("Habitación distinta y no sé a qué tabla del kardex corresponde (cambiar a mano; "
+                           "puede requerir mover de servicio)") if tablas else revisar.detalle
+        return [revisar]
+    if d.indice != fila.tabla and normalizar(d.servicio) != normalizar(fila.servicio):
+        donde = " · ".join(x for x in (fila.servicio, fila.habitacion) if x)
+        return [Accion("MOVER", fila.nombre, "HABITACIÓN", donde, f"{d.servicio} · {codigo}", fila,
+                       f"Cambió de piso: estaba en {fila.servicio}, el sistema dice {p.habitacion} → va a {d.servicio}",
+                       servicio=fila.servicio, habitacion=fila.habitacion, sis=p, destino=d.servicio,
+                       tabla_destino=d.indice, habitacion_nueva=codigo)]
+    return [Accion("ACTUALIZAR", fila.nombre, "HABITACIÓN", fila.habitacion, codigo, fila,
+                   f"Cambió de habitación: el sistema dice {p.habitacion}",
+                   servicio=fila.servicio, habitacion=fila.habitacion, sis=p, habitacion_nueva=codigo)]
+
+
+def comparar(sistema, kardex, nuevos=(), tablas=(), entregas=()):
+    """Devuelve lista de Accion.
+    sistema: list[PacienteSistema]; kardex: list[FilaKardex].
+    nuevos: pares (PacienteSistema, PacienteEntrega) de pacientes que las entregas mandan a cirugía general y que NO
+        están en el kardex (el PacienteSistema ya con su detalle; la PacienteEntrega aporta nombre, edad y documento
+        tal como están en las entregas). Cada par genera una acción AGREGAR.
+    tablas: list[TablaKardex] (kardex_doc.tablas_kardex) para saber a qué tabla va una habitación; sin ellas no hay
+        MOVER ni se puede decidir el destino de un AGREGAR.
+    entregas: list[PacienteEntrega] para saber en qué documento de entregas está un paciente del kardex
+        (desempata el servicio cuando la habitación no alcanza)."""
     acciones = []
-    usados = set()
     for fila in kardex:
         p = buscar_paciente(fila.nombre, fila.documento, sistema)
         if not p:
@@ -326,14 +500,14 @@ def comparar(sistema, kardex):
                                    fila, f"No aparece en el sistema (¿alta?). Está en {fila.servicio}.",
                                    marcada=False, servicio=fila.servicio, habitacion=fila.habitacion))
             continue
-        usados.add(id(p))
         if p.aviso:
             acciones.append(Accion("REVISAR", fila.nombre, detalle=p.aviso, fila=fila, marcada=False,
                                    servicio=fila.servicio, habitacion=fila.habitacion, sis=p))
         if p.habitacion and fila.habitacion and not misma_habitacion(fila.habitacion, p.habitacion):
-            acciones.append(Accion("REVISAR", fila.nombre, "HABITACIÓN", fila.habitacion, p.habitacion,
-                                   fila, "Habitación distinta (cambiar a mano; puede requerir mover de servicio)",
-                                   marcada=False, servicio=fila.servicio, habitacion=fila.habitacion, sis=p))
+            acciones.extend(_cambio_de_habitacion(fila, p, tablas, entregas))
+        elif p.habitacion and _otra_tabla(fila, p, tablas, entregas):
+            # sin número en el kardex (PASILLO, CUB 12…) pero el sistema dice otro piso: también se mueve
+            acciones.extend(_cambio_de_habitacion(fila, p, tablas, entregas))
         if not p.encontrado_detalle:
             continue
         nota = ", ".join(x for x in (p.fecha.split(" ")[0], p.medico) if x) or "la nota más reciente"
@@ -347,9 +521,13 @@ def comparar(sistema, kardex):
             if nuevo and not _igual_campo(campo, nuevo, actual):
                 acciones.append(Accion("ACTUALIZAR", fila.nombre, campo, actual, con_prefijo(campo, nuevo, actual), fila,
                                        detalle, servicio=fila.servicio, habitacion=fila.habitacion, sis=p))
-    for p in sistema:
-        if id(p) not in usados:
-            acciones.append(Accion("AGREGAR", p.nombre, "", "", _resumen(p.nombre, p.habitacion, p.dx, p.fecha, p.medico),
-                                   None, f"En el sistema ({p.modo}, {p.habitacion}) y no en el kardex",
-                                   marcada=False, servicio=p.modo, habitacion=p.habitacion, sis=p))
+        faltan = imagenes_nuevas(p.imagenes, fila.imagenes) if fila.col_imagenes is not None else []
+        if faltan:                          # los estudios nuevos se INSERTAN arriba; lo que ya hay no se toca
+            insertar = unir_bloques(faltan)
+            acciones.append(Accion("ACTUALIZAR", fila.nombre, "IMÁGENES / NOTAS", fila.imagenes,
+                                   insertar_imagenes(fila.imagenes, insertar), fila,
+                                   f"{len(faltan)} estudio(s) nuevo(s) de imágenes",
+                                   servicio=fila.servicio, habitacion=fila.habitacion, sis=p, insertar=insertar))
+    for p, e in nuevos:
+        acciones.append(_agregar(p, e, tablas))
     return acciones

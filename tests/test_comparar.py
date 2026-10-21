@@ -1,4 +1,4 @@
-from comparar import FilaKardex, PacienteSistema, comparar
+from comparar import FilaKardex, PacienteEntrega, PacienteSistema, TablaKardex, comparar
 
 
 def _fila(nombre="JUAN PEREZ", hab="H-1", servicio="PISO 3", **kw):
@@ -17,20 +17,21 @@ def test_actualizar_lleva_servicio_y_habitacion():
     assert a.automatica
 
 
-def test_agregar_resumen():
-    p = PacienteSistema("MORA QUINTERO ESPERANZA", "UCI5-09", "Urgencias", medico="FABIAN",
-                        fecha="19/10/2026", dx="CHOQUE SEPTICO")
-    (a,) = comparar([p], [])
-    assert a.tipo == "AGREGAR" and a.fila is None and not a.automatica
-    assert a.actual == "" and a.campo == ""
-    assert a.nuevo.splitlines() == ["MORA QUINTERO ESPERANZA · UCI5-09", "DX: CHOQUE SEPTICO",
-                                    "Última evolución: 19/10/2026, FABIAN"]
-    assert (a.servicio, a.habitacion) == ("Urgencias", "UCI5-09")
+def test_el_sistema_ya_no_propone_pacientes_nuevos():
+    # AGREGAR solo sale de los documentos de entregas (parámetro `nuevos`); lo que está solo en el sistema se ignora
+    p = PacienteSistema("MORA QUINTERO ESPERANZA", "UCI5-09", "Urgencias", medico="FABIAN", fecha="19/10/2026", dx="CHOQUE SEPTICO")
+    assert comparar([p], []) == []
+    (r,) = comparar([p], [_fila("OTRO PACIENTE ASI", "H-5")])
+    assert r.tipo == "RETIRAR"
 
 
-def test_agregar_sin_detalle():
-    (a,) = comparar([PacienteSistema("ANA LOPEZ RUIZ", "", "Urgencias")], [])
-    assert a.nuevo == "ANA LOPEZ RUIZ"
+def test_agregar_desde_entregas_sin_detalle():
+    p = PacienteSistema("LOPEZ RUIZ ANA", "", "Urgencias")
+    e = PacienteEntrega("ANA LOPEZ RUIZ", doc="UCI 1")
+    (a,) = comparar([], [], nuevos=[(p, e)], tablas=[TablaKardex(3, "UCI 1")])
+    assert a.tipo == "AGREGAR" and a.fila is None and a.automatica and a.campo == "" and a.actual == ""
+    assert a.fila_nueva == {"DATOS": "ANA LOPEZ RUIZ"} and a.nuevo == "DATOS\nANA LOPEZ RUIZ"
+    assert (a.paciente, a.servicio, a.destino, a.tabla_destino) == ("ANA LOPEZ RUIZ", "UCI 1", "UCI 1", 3)
 
 
 def test_retirar_resumen():
